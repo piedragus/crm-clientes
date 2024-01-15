@@ -1,0 +1,14 @@
+flask>=3.0
+ttkbootstrap
+fuzzywuzzy
+thefuzz
+python-Levenshtein
+pandas
+openpyxl
+pdfplumber
+python-docx
+python-pptx
+google-genai
+openai
+anthropic
+chardet
