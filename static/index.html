@@ -1,0 +1,1808 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CRM Clientes</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --sidebar:#0F172A;--sidebar2:#1E293B;--accent:#3B82F6;--accent-dk:#2563EB;
+  --danger:#EF4444;--ok:#22C55E;--warn:#F59E0B;--purple:#8B5CF6;
+  --bg:#F1F5F9;--panel:#fff;--border:#E2E8F0;--border-dk:#CBD5E1;
+  --txt:#0F172A;--txt2:#475569;--muted:#94A3B8;
+  --row-g:#DCFCE7;--row-a:#FEF9C3;--row-r:#FEE2E2;--row-n:#F8FAFC;
+}
+body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
+     display:flex;height:100vh;overflow:hidden;background:var(--sidebar)}
+
+/* ── Sidebar ── */
+#sidebar{width:220px;min-width:220px;display:flex;flex-direction:column;
+         background:var(--sidebar);color:#fff;overflow-y:auto}
+#logo{background:var(--accent);padding:14px 16px;display:flex;
+      align-items:center;gap:8px;flex-shrink:0}
+#logo strong{font-size:20px}#logo span{font-size:10px;color:#BFDBFE}
+#stats{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:8px}
+.stat-card{background:var(--sidebar2);padding:8px 10px;border-radius:4px}
+.stat-card .lbl{font-size:9px;font-weight:700;color:var(--muted);
+                text-transform:uppercase;letter-spacing:.5px}
+.stat-card .val{font-size:20px;font-weight:700;margin-top:2px}
+.stat-card.c-emp .val{color:#fff}
+.stat-card.c-con .val{color:var(--ok)}
+.stat-card.c-cot .val{color:var(--warn)}
+.stat-card.c-rec .val{color:var(--accent)}
+.nav-sep{font-size:9px;font-weight:700;color:var(--muted);
+         text-transform:uppercase;letter-spacing:.5px;
+         padding:12px 10px 4px;display:flex;align-items:center;gap:6px}
+.nav-sep::after{content:"";flex:1;height:1px;background:var(--sidebar2)}
+.nav-item{padding:8px 12px;color:#94A3B8;cursor:pointer;
+          font-size:12px;transition:background .15s}
+.nav-item:hover{background:var(--sidebar2);color:#fff}
+#sidebar-ver{margin-top:auto;padding:8px 12px;font-size:10px;color:var(--muted)}
+
+/* ── Main ── */
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+
+/* Topbar */
+#topbar{background:var(--sidebar);height:50px;display:flex;
+        align-items:center;padding:0 14px;gap:10px;flex-shrink:0}
+#topbar label{color:var(--muted);font-size:12px}
+#search{background:#1E293B;border:none;color:#fff;padding:5px 10px;
+        border-radius:4px;width:220px;font-size:12px;outline:none}
+#search::placeholder{color:var(--muted)}
+#btn-filters{background:#1E293B;color:#CBD5E1;border:none;padding:5px 10px;
+             border-radius:4px;cursor:pointer;font-size:12px}
+#filter-badge{color:var(--warn);font-size:12px}
+#topbar-right{margin-left:auto;display:flex;gap:8px}
+
+/* Btn */
+.btn{border:none;padding:5px 14px;border-radius:4px;cursor:pointer;
+     font-size:12px;font-weight:600;transition:opacity .15s}
+.btn:hover{opacity:.85}
+.btn:disabled{opacity:.4;cursor:default}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-ghost{background:var(--border);color:var(--txt2)}
+.btn-danger{background:#FEE2E2;color:var(--danger)}
+.btn-ok{background:#DCFCE7;color:#15803D}
+.btn-accent{background:#DBEAFE;color:var(--accent-dk)}
+.btn-dark{background:var(--sidebar2);color:#CBD5E1}
+.btn-warn{background:#FEF3C7;color:#92400E}
+
+/* Body split */
+#body{flex:1;display:flex;overflow:hidden;padding:8px;gap:8px}
+
+/* Left panel */
+#list-panel{width:390px;min-width:300px;display:flex;flex-direction:column;
+            background:var(--panel);border-radius:6px;overflow:hidden}
+#list-header{background:var(--sidebar);padding:8px 12px;
+             display:flex;justify-content:space-between;align-items:center;
+             color:#fff;font-weight:700;font-size:12px}
+#list-count{font-size:11px;color:#93C5FD}
+#list-table-wrap{flex:1;overflow:auto}
+#list-table{width:100%;border-collapse:collapse;font-size:12px}
+#list-table th{background:var(--sidebar);color:#fff;padding:7px 8px;
+               text-align:left;position:sticky;top:0;cursor:pointer;
+               user-select:none;white-space:nowrap;font-weight:600;font-size:11px}
+#list-table th:hover{background:#1E293B}
+#list-table td{padding:6px 8px;border-bottom:1px solid var(--border)}
+#list-table tr{cursor:pointer;transition:background .1s}
+#list-table tr:hover td{background:#EFF6FF}
+#list-table tr.selected td{background:#DBEAFE}
+#list-table tr.row-g td{background:var(--row-g)}
+#list-table tr.row-a td{background:var(--row-a)}
+#list-table tr.row-r td{background:var(--row-r)}
+#list-table tr.row-n td{background:var(--row-n)}
+#list-table tr.row-g.selected td,
+#list-table tr.row-a.selected td,
+#list-table tr.row-r.selected td,
+#list-table tr.row-n.selected td{background:#DBEAFE}
+#list-pager{padding:6px 10px;background:var(--bg);border-top:1px solid var(--border);
+            display:flex;gap:6px;align-items:center;font-size:11px;color:var(--muted)}
+
+/* Right panel */
+#detail-panel{flex:1;display:flex;flex-direction:column;
+              background:var(--panel);border-radius:6px;overflow:hidden}
+#detail-header{padding:10px 14px;display:flex;align-items:center;gap:8px;
+               border-bottom:1px solid var(--border)}
+#detail-name{font-size:17px;font-weight:700;flex:1;min-width:0;
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#detail-btns{display:flex;gap:4px;flex-shrink:0}
+
+/* Tabs */
+#tabs{display:flex;border-bottom:1px solid var(--border);
+      background:var(--bg);flex-shrink:0}
+.tab{padding:8px 16px;cursor:pointer;font-size:12px;font-weight:600;
+     color:var(--muted);border-bottom:2px solid transparent;
+     transition:color .15s}
+.tab:hover{color:var(--txt)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-panel{display:none;flex:1;overflow:auto;padding:14px}
+.tab-panel.active{display:flex;flex-direction:column;gap:10px}
+
+/* Form grid */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px}
+.field{display:flex;flex-direction:column;gap:3px}
+.field label{font-size:10px;font-weight:700;color:var(--muted);
+             text-transform:uppercase;letter-spacing:.4px}
+.field input,.field select{border:1px solid var(--border);padding:5px 8px;
+                            border-radius:4px;font-size:12px;
+                            background:var(--bg);color:var(--txt);outline:none}
+.field input:focus,.field select:focus{border-color:var(--accent);
+                                        background:#fff}
+.field input[readonly]{background:var(--bg);color:var(--txt2)}
+
+/* Sub table */
+.sub-wrap{flex:1;overflow:auto;border:1px solid var(--border);border-radius:4px}
+.sub-table{width:100%;border-collapse:collapse;font-size:12px}
+.sub-table th{background:var(--bg);padding:6px 8px;text-align:left;
+              font-weight:700;font-size:11px;color:var(--txt2);
+              border-bottom:1px solid var(--border);position:sticky;top:0}
+.sub-table td{padding:6px 8px;border-bottom:1px solid var(--border)}
+.sub-table tr:hover td{background:#F8FAFC;cursor:pointer}
+.sub-table tr.selected td{background:#DBEAFE}
+
+/* Resumen strip */
+#cot-resumen{padding:6px 10px;background:var(--bg);border-radius:4px;
+             font-size:11px;color:var(--txt2);border:1px solid var(--border);
+             min-height:28px}
+#cot-resumen .lbl{font-weight:700;color:var(--muted);margin-right:6px}
+
+/* Modal overlay */
+#overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);
+         z-index:100;align-items:center;justify-content:center}
+#overlay.show{display:flex}
+.modal{background:#fff;border-radius:8px;padding:0;width:480px;max-width:96vw;
+       max-height:92vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.modal-header{background:var(--sidebar);color:#fff;padding:12px 16px;
+              display:flex;justify-content:space-between;align-items:center;
+              border-radius:8px 8px 0 0;font-weight:700;font-size:13px}
+.modal-body{padding:16px;display:flex;flex-direction:column;gap:12px}
+.modal-footer{padding:10px 16px;background:var(--bg);border-top:1px solid var(--border);
+              display:flex;justify-content:flex-end;gap:8px;
+              border-radius:0 0 8px 8px}
+.modal-close{background:none;border:none;color:#94A3B8;cursor:pointer;
+             font-size:18px;line-height:1}
+
+/* Toast */
+#toast{position:fixed;bottom:20px;right:20px;z-index:200;
+       display:flex;flex-direction:column;gap:6px}
+.toast-item{padding:8px 14px;border-radius:6px;font-size:12px;
+            color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.2);
+            animation:slide-in .2s ease}
+.toast-ok{background:#16A34A}.toast-err{background:#DC2626}
+.toast-info{background:var(--accent)}
+@keyframes slide-in{from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1}}
+
+/* Search modal */
+#search-modal .modal{width:900px}
+#srch-table-wrap{max-height:400px;overflow:auto;border:1px solid var(--border)}
+
+/* Historial */
+#hist-table-wrap{max-height:360px;overflow:auto}
+.fuente-usuario{background:#DBEAFE}
+.fuente-gemini{background:#DCFCE7}
+.fuente-grok{background:#FEF9C3}
+.fuente-importacion{background:#EDE9FE}
+
+/* Importer */
+#importer-modal .modal{width:900px}
+#scan-table-wrap{max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:4px}
+.sim-high td{background:#DCFCE7}
+.sim-med td{background:#FEF9C3}
+.sim-low td{background:#FEE2E2}
+
+/* Dupes */
+#dupes-modal .modal{width:800px}
+
+/* Loader */
+.spinner{display:inline-block;width:14px;height:14px;
+         border:2px solid var(--border);border-top-color:var(--accent);
+         border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-row td{text-align:center;color:var(--muted);padding:20px}
+
+/* Placeholder */
+#placeholder{display:flex;flex-direction:column;align-items:center;
+             justify-content:center;flex:1;color:var(--muted);gap:8px;
+             font-size:13px}
+#placeholder svg{opacity:.3}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div id="sidebar">
+  <div id="logo"><strong>CRM</strong><span>Clientes</span></div>
+  <div id="stats">
+    <div class="stat-card c-emp"><div class="lbl">Empresas</div><div class="val" id="s-emp">—</div></div>
+    <div class="stat-card c-con"><div class="lbl">Contactos</div><div class="val" id="s-con">—</div></div>
+    <div class="stat-card c-cot"><div class="lbl">Cotizaciones</div><div class="val" id="s-cot">—</div></div>
+    <div class="stat-card c-rec"><div class="lbl">Activas 30d</div><div class="val" id="s-rec">—</div></div>
+  </div>
+  <div class="nav-sep">Importar</div>
+  <div class="nav-item" onclick="showImportCSV()">CSV de mails</div>
+  <div class="nav-item" onclick="showImportCSV()">CSV de contactos</div>
+  <div class="nav-item" onclick="showImportCarpeta()">Carpeta de cotizaciones</div>
+  <div class="nav-sep">Herramientas</div>
+  <div class="nav-item" onclick="showDupes()">Buscar duplicados</div>
+  <div class="nav-item" onclick="showSearch()">Buscar cotizaciones</div>
+  <div class="nav-item" onclick="showExportMenu()">Exportar…</div>
+  <div class="nav-item" onclick="doBackup()">Hacer backup</div>
+  <div class="nav-item" onclick="doRestore()">Restaurar backup</div>
+  <div class="nav-item" onclick="showDiagnostico()">Diagnóstico de datos</div>
+  <div class="nav-item" onclick="showVerificacion()">Verificar instalación</div>
+  <div class="nav-sep">IA</div>
+  <div class="nav-item" onclick="showEnriquecer()">Enriquecer nombres (Gemini/Grok)</div>
+  <div id="sidebar-ver">v25</div>
+</div>
+
+<!-- Main -->
+<div id="main">
+  <!-- Topbar -->
+  <div id="topbar">
+    <label>Buscar:</label>
+    <input id="search" placeholder="Nombre o país…" oninput="onSearch()">
+    <button class="btn btn-dark" id="btn-filters" onclick="showFilters()">Filtros</button>
+    <span id="filter-badge"></span>
+    <div id="topbar-right">
+      <button class="btn btn-dark" onclick="showSearch()">Buscar cotizaciones</button>
+      <button class="btn btn-primary" onclick="showNewEmpresa()">+ Nueva empresa</button>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div id="body">
+    <!-- List -->
+    <div id="list-panel">
+      <div id="list-header">
+        <span>Empresas</span>
+        <span id="list-count"></span>
+      </div>
+      <div id="list-table-wrap">
+        <table id="list-table">
+          <thead>
+            <tr>
+              <th onclick="sortList('nombre')">Empresa <span id="sort-nombre"></span></th>
+              <th onclick="sortList('pais')">País <span id="sort-pais"></span></th>
+              <th onclick="sortList('ultima')">Últ. Cotiz. <span id="sort-ultima"></span></th>
+              <th onclick="sortList('ncot')"># <span id="sort-ncot"></span></th>
+            </tr>
+          </thead>
+          <tbody id="list-body">
+            <tr class="loading-row"><td colspan="4"><div class="spinner"></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="list-pager">
+        <button class="btn btn-ghost" id="pg-prev" onclick="prevPage()" style="padding:3px 8px">◀</button>
+        <span id="pg-label"></span>
+        <button class="btn btn-ghost" id="pg-next" onclick="nextPage()" style="padding:3px 8px">▶</button>
+      </div>
+    </div>
+
+    <!-- Detail -->
+    <div id="detail-panel">
+      <div id="detail-header">
+        <span id="detail-name" style="color:var(--muted)">Seleccioná una empresa</span>
+        <div id="detail-btns">
+          <button class="btn btn-ghost" id="btn-edit" onclick="toggleEdit()" disabled>Editar</button>
+          <button class="btn btn-primary" id="btn-save" onclick="saveEmpresa()" disabled style="display:none">Guardar</button>
+          <button class="btn btn-ghost" id="btn-hist" onclick="showHistorial()" disabled>Historial</button>
+          <button class="btn btn-ghost" id="btn-valid" onclick="showValidar()" disabled>Validar</button>
+          <button class="btn btn-danger" id="btn-del" onclick="delEmpresa()" disabled>Eliminar</button>
+        </div>
+      </div>
+      <div id="tabs">
+        <div class="tab active" onclick="switchTab('empresa')">Empresa / Contactos</div>
+        <div class="tab" onclick="switchTab('cotizaciones')">Cotizaciones</div>
+      </div>
+
+      <!-- Tab Empresa/Contactos -->
+      <div id="tab-empresa" class="tab-panel active">
+        <div class="form-grid" id="emp-form">
+          <div class="field"><label>Nombre</label><input id="f-nombre" readonly></div>
+          <div class="field"><label>Teléfono</label><input id="f-telefono" readonly></div>
+          <div class="field"><label>Dirección</label><input id="f-direccion" readonly></div>
+          <div class="field"><label>País</label><input id="f-pais" readonly></div>
+          <div class="field"><label>Email</label><input id="f-email" readonly></div>
+          <div class="field"><label>Rubro</label><input id="f-rubro" readonly></div>
+          <div class="field" style="grid-column:1/-1"><label>Tags (separados por coma)</label><input id="f-tags" readonly></div>
+        </div>
+        <!-- Separator -->
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+          <div style="flex:1;height:1px;background:var(--border)"></div>
+          <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Contactos</span>
+          <div style="flex:1;height:1px;background:var(--border)"></div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn btn-ok" id="btn-add-con" onclick="showAddContacto()" disabled>+ Agregar</button>
+          <button class="btn btn-ghost" id="btn-edit-con" onclick="showEditContacto()" disabled>Editar</button>
+          <button class="btn btn-danger" id="btn-del-con" onclick="delContacto()" disabled>Eliminar</button>
+        </div>
+        <div class="sub-wrap" style="min-height:100px">
+          <table class="sub-table"><thead><tr>
+            <th>Nombre</th><th>Email</th><th>Teléfono</th><th>País</th>
+          </tr></thead>
+          <tbody id="con-body"></tbody></table>
+        </div>
+      </div>
+
+      <!-- Tab Cotizaciones -->
+      <div id="tab-cotizaciones" class="tab-panel">
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn btn-ok"     id="btn-add-cot" onclick="showAddCotizacion()" disabled>+ Nueva</button>
+          <button class="btn btn-ghost"  id="btn-edit-cot" onclick="showEditCotizacion()" disabled>Editar</button>
+          <button class="btn btn-accent" id="btn-resumir"  onclick="doResumirCot()" disabled>Resumen IA</button>
+          <button class="btn btn-danger" id="btn-del-cot"  onclick="delCotizacion()" disabled>Eliminar</button>
+        </div>
+        <div class="sub-wrap" style="flex:1">
+          <table class="sub-table"><thead><tr>
+            <th>Fecha</th><th>Archivo / Descripción</th><th>Tipo</th><th>IA</th><th style="text-align:right">Monto</th>
+          </tr></thead>
+          <tbody id="cot-body"></tbody></table>
+        </div>
+        <div id="cot-resumen"><span class="lbl">Resumen:</span><span id="cot-resumen-txt">—</span></div>
+      </div>
+
+      <div id="placeholder" style="display:none">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+        </svg>
+        Seleccioná una empresa para ver los detalles
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast"></div>
+
+<!-- ============================================================
+     MODALS
+     ============================================================ -->
+
+<!-- Export modal -->
+  <div class="modal" id="export-modal" style="display:none;width:320px">
+    <div class="modal-header">
+      <span>Exportar</span>
+      <button class="modal-close" onclick="closeModal('export-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>Datos</label>
+        <select id="exp-tipo">
+          <option value="empresas">Empresas</option>
+          <option value="contactos">Contactos</option>
+          <option value="cotizaciones">Cotizaciones</option>
+        </select>
+      </div>
+      <div class="field"><label>Formato</label>
+        <select id="exp-fmt">
+          <option value="xlsx">Excel (.xlsx)</option>
+          <option value="csv">CSV (.csv)</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('export-modal')">Cancelar</button>
+      <button class="btn btn-primary" onclick="doExportConfirm()">Descargar</button>
+    </div>
+  </div>
+
+<!-- Generic overlay -->
+<div id="overlay">
+  <!-- Nueva/Editar empresa -->
+  <div class="modal" id="modal-empresa" style="display:none">
+    <div class="modal-header">
+      <span id="modal-empresa-title">Nueva Empresa</span>
+      <button class="modal-close" onclick="closeModal('modal-empresa')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field"><label>Nombre *</label><input id="me-nombre"></div>
+        <div class="field"><label>Teléfono</label><input id="me-telefono"></div>
+        <div class="field"><label>Dirección</label><input id="me-direccion"></div>
+        <div class="field"><label>País</label><input id="me-pais"></div>
+        <div class="field"><label>Email</label><input id="me-email"></div>
+        <div class="field"><label>Rubro</label><input id="me-rubro"></div>
+        <div class="field" style="grid-column:1/-1"><label>Tags</label><input id="me-tags"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-empresa')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveEmpresaModal()">Guardar</button>
+    </div>
+  </div>
+
+  <!-- Contacto -->
+  <div class="modal" id="modal-contacto" style="display:none">
+    <div class="modal-header">
+      <span id="modal-contacto-title">Contacto</span>
+      <button class="modal-close" onclick="closeModal('modal-contacto')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field"><label>Nombre *</label><input id="mc-nombre"></div>
+        <div class="field"><label>Email *</label><input id="mc-email"></div>
+        <div class="field"><label>Teléfono</label><input id="mc-telefono"></div>
+        <div class="field"><label>País</label><input id="mc-pais"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-contacto')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveContacto()">Guardar</button>
+    </div>
+  </div>
+
+  <!-- Cotización -->
+  <div class="modal" id="modal-cotizacion" style="display:none">
+    <div class="modal-header">
+      <span id="modal-cot-title">Nueva Cotización</span>
+      <button class="modal-close" onclick="closeModal('modal-cotizacion')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Tipo</label>
+        <select id="mc-tipo">
+          <option value="">— Sin tipo —</option>
+          <option>Equipos</option><option>Comercial</option>
+          <option>Servicio</option><option>Mantenimiento</option><option>Otro</option>
+        </select>
+      </div>
+      <div class="field"><label>Descripción *</label><input id="mc-desc"></div>
+      <div class="field"><label>Monto ($)</label><input id="mc-monto" type="number" step="0.01" min="0"></div>
+      <div class="field"><label>Fecha (YYYY-MM-DD)</label><input id="mc-fecha" placeholder="opcional"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-cotizacion')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveCotizacion()">Guardar</button>
+    </div>
+  </div>
+
+  <!-- Historial -->
+  <div class="modal" id="modal-historial" style="display:none;width:820px;max-width:96vw">
+    <div class="modal-header">
+      <span id="modal-hist-title">Historial</span>
+      <button class="modal-close" onclick="closeModal('modal-historial')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:0">
+      <div id="hist-table-wrap">
+        <table class="sub-table" style="width:100%">
+          <thead><tr><th>Fecha</th><th>Campo</th><th>Anterior</th><th>Nuevo</th><th>Fuente</th><th></th></tr></thead>
+          <tbody id="hist-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <span style="color:var(--muted);font-size:11px" id="hist-sel-info"></span>
+      <button class="btn btn-warn" id="btn-revertir" onclick="revertirCambio()" disabled>↩ Deshacer</button>
+      <button class="btn btn-danger" id="btn-del-hist" onclick="delCambio()" disabled>Eliminar registro</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-historial')">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- Búsqueda global -->
+  <div class="modal" id="search-modal" style="display:none;width:960px;max-width:96vw">
+    <div class="modal-header">
+      <span>Buscar cotizaciones</span>
+      <button class="modal-close" onclick="closeModal('search-modal')">✕</button>
+    </div>
+    <div class="modal-body" style="gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="field" style="flex:2;min-width:160px"><label>Texto</label><input id="sq-q" oninput="doSearch()"></div>
+        <div class="field" style="flex:2;min-width:120px"><label>Empresa</label><input id="sq-emp" oninput="doSearch()"></div>
+        <div class="field"><label>Monto mín</label><input id="sq-mmin" type="number" oninput="doSearch()" style="width:90px"></div>
+        <div class="field"><label>Monto máx</label><input id="sq-mmax" type="number" oninput="doSearch()" style="width:90px"></div>
+        <div class="field">
+          <label>Tipo</label>
+          <select id="sq-tipo" onchange="doSearch()" style="width:120px">
+            <option value="">Todos</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Período</label>
+          <select id="sq-per" onchange="doSearch()" style="width:130px">
+            <option value="">Cualquiera</option>
+            <option value="7">Últimos 7 días</option>
+            <option value="30">Últimos 30 días</option>
+            <option value="90">Últimos 90 días</option>
+            <option value="365">Último año</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="btn btn-ghost" onclick="clearSearch()">Limpiar</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;font-size:11px;color:var(--muted)">
+        <span id="srch-info"></span>
+        <span style="margin-left:auto" id="srch-total"></span>
+        <button class="btn btn-ghost" id="srch-prev" onclick="srchPage(-1)" style="padding:3px 8px">◀</button>
+        <span id="srch-pg"></span>
+        <button class="btn btn-ghost" id="srch-next" onclick="srchPage(1)" style="padding:3px 8px">▶</button>
+      </div>
+      <div id="srch-table-wrap">
+        <table class="sub-table" style="width:100%">
+          <thead><tr><th>Fecha</th><th>Empresa</th><th>Descripción</th><th>Tipo</th><th style="text-align:right">Monto</th></tr></thead>
+          <tbody id="srch-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" id="srch-goto" onclick="gotoEmpresaFromSearch()" disabled>Ir a empresa →</button>
+      <button class="btn btn-ghost" onclick="closeModal('search-modal')">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- Duplicados -->
+  <div class="modal" id="dupes-modal" style="display:none;width:840px;max-width:96vw">
+    <div class="modal-header">
+      <span>Duplicados</span>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:16px">
+        <label style="color:#94A3B8;font-size:11px">Umbral %:</label>
+        <input id="dupes-thresh" type="number" value="85" min="50" max="100"
+               style="width:55px;padding:3px 6px;background:#1E293B;border:1px solid #334155;
+                      color:#fff;border-radius:4px;font-size:12px">
+        <button class="btn btn-ghost" onclick="loadDupes()" style="padding:4px 10px">Buscar</button>
+      </div>
+      <button class="modal-close" onclick="closeModal('dupes-modal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:0">
+      <div style="max-height:380px;overflow:auto">
+        <table class="sub-table" style="width:100%">
+          <thead><tr><th>Empresa A</th><th>Empresa B</th><th>Similitud</th><th></th></tr></thead>
+          <tbody id="dupes-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <span id="dupes-status" style="color:var(--muted);font-size:11px;margin-right:auto"></span>
+      <button class="btn btn-ghost" onclick="closeModal('dupes-modal')">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- Importar carpeta -->
+  <div class="modal" id="importer-modal" style="display:none;width:960px;max-width:96vw">
+    <div class="modal-header">
+      <span>Importar carpeta de cotizaciones</span>
+      <button class="modal-close" onclick="closeModal('importer-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <div class="field" style="flex:1">
+          <label>Ruta de carpeta en el servidor</label>
+          <input id="imp-path" placeholder="/srv/cotizaciones">
+        </div>
+        <div class="field">
+          <label>Umbral auto (%)</label>
+          <input id="imp-thresh" type="number" value="90" min="50" max="100" style="width:70px">
+        </div>
+        <button class="btn btn-primary" onclick="escanear()">Escanear</button>
+      </div>
+      <div id="scan-table-wrap" style="display:none">
+        <table class="sub-table" style="width:100%">
+          <thead><tr>
+            <th><input type="checkbox" id="chk-all" onchange="toggleAll(this)"> Archivo</th>
+            <th>Carpeta</th><th>Empresa sugerida</th><th>Sim%</th>
+            <th>Empresa final</th>
+          </tr></thead>
+          <tbody id="scan-body"></tbody>
+        </table>
+      </div>
+      <div id="scan-info" style="font-size:11px;color:var(--muted)"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ok" id="btn-imp-auto" onclick="importarAuto()" disabled>✓ Importar automáticos</button>
+      <button class="btn btn-primary" id="btn-imp-sel" onclick="importarSeleccionados()" disabled>Importar seleccionados</button>
+      <button class="btn btn-ghost" onclick="closeModal('importer-modal')">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- Enriquecedor -->
+  <div class="modal" id="enricher-modal" style="display:none">
+    <div class="modal-header">
+      <span>Enriquecer nombres con IA</span>
+      <button class="modal-close" onclick="closeModal('enricher-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field"><label>Proveedor</label>
+          <select id="en-provider"><option value="auto">Auto (Gemini → Grok)</option>
+            <option value="gemini">Gemini</option><option value="grok">Grok</option>
+          </select></div>
+        <div class="field"><label>Límite</label><input id="en-limit" type="number" value="50" min="1"></div>
+        <div class="field"><label>Confianza mínima</label><input id="en-conf" type="number" value="0.85" step="0.05" min="0" max="1"></div>
+        <div class="field"><label>Solo nombres (filtrar)</label><input id="en-only" placeholder="ACME, Beta..."></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px">
+        <input type="checkbox" id="en-apply">
+        <span>Aplicar cambios a la DB (sin marcar: solo vista previa)</span>
+      </label>
+      <div id="en-results" style="display:none;max-height:280px;overflow:auto;
+           border:1px solid var(--border);border-radius:4px">
+        <table class="sub-table" style="width:100%">
+          <thead><tr><th>Nombre actual</th><th>Nombre sugerido</th><th>Conf.</th><th>Aplicar?</th></tr></thead>
+          <tbody id="en-body"></tbody>
+        </table>
+      </div>
+      <div id="en-status" style="font-size:11px;color:var(--muted)"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('enricher-modal')">Cerrar</button>
+      <button class="btn btn-primary" onclick="runEnriquecedor()">Ejecutar</button>
+    </div>
+  </div>
+
+
+  <!-- Diagnóstico -->
+  <div class="modal" id="diagnostico-modal" style="display:none;width:760px">
+    <div class="modal-header">
+      <span id="diag-title">Diagnóstico</span>
+      <button class="modal-close" onclick="closeModal('diagnostico-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="diag-status" style="font-size:12px;color:var(--muted)">Cargando…</div>
+      <div style="max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:4px">
+        <table class="sub-table" style="width:100%"><tbody id="diag-body"></tbody></table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('diagnostico-modal')">Cerrar</button>
+      <button class="btn btn-primary" onclick="showDiagnostico()">Actualizar</button>
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <div class="modal" id="filters-modal" style="display:none;width:360px">
+    <div class="modal-header">
+      <span>Filtros</span>
+      <button class="modal-close" onclick="closeModal('filters-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>País</label>
+        <select id="fl-pais"><option value="">Todos</option></select></div>
+      <div class="field"><label>Rubro</label>
+        <select id="fl-rubro"><option value="">Todos</option></select></div>
+      <div class="field"><label>Tag</label>
+        <select id="fl-tag"><option value="">Todos</option></select></div>
+      <div class="field"><label>Cotizaciones</label>
+        <select id="fl-cot">
+          <option value="">Todas las empresas</option>
+          <option value="con">Solo con cotizaciones</option>
+          <option value="sin">Solo sin cotizaciones</option>
+        </select></div>
+      <div class="field"><label>Contactos</label>
+        <select id="fl-con">
+          <option value="">Todas las empresas</option>
+          <option value="con">Solo con contactos</option>
+          <option value="sin">Solo sin contactos</option>
+        </select></div>
+      <div class="field"><label>Sin actividad en más de (días, 0=ignorar)</label>
+        <input id="fl-dias" type="number" value="0" min="0"></div>
+    </div>
+    <div id="filtros-guardados-bar" style="padding:8px 16px 0;display:flex;gap:6px;flex-wrap:wrap"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="clearFilters()">Limpiar</button>
+      <button class="btn btn-ghost" onclick="saveFilterPreset()" title="Guardar filtro actual">💾 Guardar</button>
+      <button class="btn btn-ghost" onclick="closeModal('filters-modal')">Cancelar</button>
+      <button class="btn btn-primary" onclick="applyFilters()">Aplicar</button>
+    </div>
+  </div>
+
+</div><!-- /overlay -->
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const S = {
+  allEmpresas: [], filtered: [], page: 0, pageSize: 100,
+  sortCol: "nombre", sortAsc: true,
+  selEmpresa: null, selContacto: null, selCotizacion: null,
+  contactos: [], cotizaciones: [],
+  editMode: false,
+  filters: {},
+  histSel: null, histRows: [],
+  srchPage: 0, srchRows: [], srchSel: null,
+  scanRows: [],
+};
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function api(method, url, body) {
+  const opts = { method, headers: {} };
+  if (body instanceof FormData) {
+    opts.body = body;
+  } else if (body) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(url, opts);
+  return r.json();
+}
+const GET  = url      => api("GET", url);
+const POST = (u, b)   => api("POST", u, b);
+const PUT  = (u, b)   => api("PUT",  u, b);
+const DEL  = url      => api("DELETE", url);
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type="ok") {
+  const el = document.createElement("div");
+  el.className = `toast-item toast-${type}`;
+  el.textContent = msg;
+  document.getElementById("toast").appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([loadStats(), loadEmpresas(), loadFilterMeta()]);
+}
+
+async function loadStats() {
+  const r = await GET("/api/stats");
+  if (!r.ok) return;
+  document.getElementById("s-emp").textContent = r.data.empresas;
+  document.getElementById("s-con").textContent = r.data.contactos;
+  document.getElementById("s-cot").textContent = r.data.cotizaciones;
+  document.getElementById("s-rec").textContent = r.data.activas_30d;
+}
+
+async function loadFilterMeta() {
+  const [paises, rubros, tags] = await Promise.all([
+    GET("/api/meta/paises"), GET("/api/meta/rubros"), GET("/api/meta/tags")
+  ]);
+  populateSelect("fl-pais",  (paises.data||[]).map(v=>({v,l:v})));
+  populateSelect("fl-rubro", (rubros.data||[]).map(v=>({v,l:v})));
+  populateSelect("fl-tag",   (tags.data||[]).map(v=>({v,l:v})));
+}
+
+function populateSelect(id, items) {
+  const sel = document.getElementById(id);
+  const cur = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  items.forEach(({v,l}) => sel.add(new Option(l, v)));
+  sel.value = cur;
+}
+
+// ── Empresa list ──────────────────────────────────────────────────────────────
+async function loadEmpresas() {
+  const q = document.getElementById("search").value.trim();
+  const params = new URLSearchParams({q});
+  Object.entries(S.filters).forEach(([k,v]) => v && params.set(k, v));
+  const r = await GET("/api/empresas?" + params);
+  if (!r.ok) return;
+  S.allEmpresas = r.data;
+  S.page = 0;
+  applySort();
+  renderList();
+}
+
+function onSearch() { clearTimeout(S._st); S._st = setTimeout(loadEmpresas, 250); }
+
+function applySort() {
+  const col = S.sortCol;
+  S.filtered = [...S.allEmpresas].sort((a,b) => {
+    let va = a[col], vb = b[col];
+    if (col === "ncot") { va = +va||0; vb = +vb||0; return S.sortAsc ? va-vb : vb-va; }
+    va = String(va||"").toLowerCase(); vb = String(vb||"").toLowerCase();
+    return S.sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+}
+
+function sortList(col) {
+  if (S.sortCol === col) S.sortAsc = !S.sortAsc;
+  else { S.sortCol = col; S.sortAsc = true; }
+  ["nombre","pais","ultima","ncot"].forEach(c => {
+    document.getElementById("sort-"+c).textContent =
+      c === col ? (S.sortAsc ? " ↑" : " ↓") : "";
+  });
+  S.page = 0; applySort(); renderList();
+}
+
+function renderList() {
+  const total = S.filtered.length;
+  const pages = Math.max(1, Math.ceil(total / S.pageSize));
+  S.page = Math.min(S.page, pages-1);
+  const chunk = S.filtered.slice(S.page*S.pageSize, (S.page+1)*S.pageSize);
+
+  document.getElementById("list-count").textContent = total;
+  document.getElementById("pg-label").textContent =
+    pages > 1 ? `${S.page+1}/${pages}` : "";
+  document.getElementById("pg-prev").disabled = S.page === 0;
+  document.getElementById("pg-next").disabled = S.page >= pages-1;
+
+  const now = new Date();
+  const tbody = document.getElementById("list-body");
+  tbody.innerHTML = chunk.map(e => {
+    const cls = e.ultima ? rowClass(e.ultima) : "row-n";
+    const sel = S.selEmpresa && S.selEmpresa.id === e.id ? " selected" : "";
+    return `<tr class="${cls}${sel}" data-id="${e.id}" onclick="selectEmpresa(${e.id})">
+      <td>${esc(e.nombre)}</td>
+      <td>${esc(e.pais||"")}</td>
+      <td>${esc(e.ultima||"")}</td>
+      <td>${e.ncot||0}</td>
+    </tr>`;
+  }).join("") || '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--muted)">Sin resultados</td></tr>';
+}
+
+function rowClass(ultima) {
+  if (!ultima) return "row-n";
+  const parts = ultima.split("-");
+  if (parts.length < 3) return "row-n";
+  // ultima is DD-MM-YYYY
+  const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+  const days = (Date.now() - d) / 86400000;
+  return days <= 30 ? "row-g" : days <= 90 ? "row-a" : "row-r";
+}
+
+function prevPage() { if (S.page > 0) { S.page--; renderList(); } }
+function nextPage() {
+  const pages = Math.ceil(S.filtered.length / S.pageSize);
+  if (S.page < pages-1) { S.page++; renderList(); }
+}
+
+// ── Select empresa ────────────────────────────────────────────────────────────
+async function selectEmpresa(id) {
+  cancelEdit();
+  const r = await GET(`/api/empresas/${id}`);
+  if (!r.ok) return;
+  S.selEmpresa = r.data;
+  S.selContacto = null; S.selCotizacion = null;
+  renderEmpresaDetail();
+  await Promise.all([loadContactos(), loadCotizaciones()]);
+  enableDetailBtns(true);
+  renderList(); // re-render to show selection
+}
+
+function renderEmpresaDetail() {
+  const e = S.selEmpresa;
+  document.getElementById("detail-name").textContent = e.nombre;
+  document.getElementById("detail-name").style.color = "var(--txt)";
+  const fmap = {nombre:"f-nombre",telefono:"f-telefono",
+                direccion:"f-direccion",pais:"f-pais",
+                email:"f-email",rubro:"f-rubro"};
+  Object.entries(fmap).forEach(([k,id]) => {
+    document.getElementById(id).value = e[k]||"";
+  });
+  document.getElementById("f-tags").value = (e.tags||[]).join(", ");
+}
+
+function enableDetailBtns(on) {
+  ["btn-edit","btn-hist","btn-valid","btn-del",
+   "btn-add-con","btn-add-cot"].forEach(id => {
+    document.getElementById(id).disabled = !on;
+  });
+}
+
+// ── Edit empresa ──────────────────────────────────────────────────────────────
+function toggleEdit() {
+  S.editMode = true;
+  ["f-nombre","f-telefono","f-direccion","f-pais","f-email","f-rubro","f-tags"].forEach(id => {
+    const el = document.getElementById(id);
+    el.removeAttribute("readonly");
+    el.style.background = "#FFFBEB";
+  });
+  document.getElementById("btn-edit").style.display = "none";
+  document.getElementById("btn-save").style.display = "";
+  document.getElementById("detail-name").style.color = "var(--warn)";
+  document.getElementById("detail-name").textContent = "Editando: " + S.selEmpresa.nombre;
+}
+
+function cancelEdit() {
+  if (!S.editMode) return;
+  S.editMode = false;
+  ["f-nombre","f-telefono","f-direccion","f-pais","f-email","f-rubro","f-tags"].forEach(id => {
+    const el = document.getElementById(id);
+    el.setAttribute("readonly","");
+    el.style.background = "";
+  });
+  document.getElementById("btn-edit").style.display = "";
+  document.getElementById("btn-save").style.display = "none";
+}
+
+async function saveEmpresa() {
+  const body = {
+    nombre:    document.getElementById("f-nombre").value.trim(),
+    direccion: document.getElementById("f-direccion").value.trim(),
+    telefono:  document.getElementById("f-telefono").value.trim(),
+    email:     document.getElementById("f-email").value.trim(),
+    rubro:     document.getElementById("f-rubro").value.trim(),
+    pais:      document.getElementById("f-pais").value.trim(),
+    tags:      document.getElementById("f-tags").value.trim(),
+  };
+  if (!body.nombre) { toast("El nombre es obligatorio","err"); return; }
+  const r = await PUT(`/api/empresas/${S.selEmpresa.id}`, body);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Empresa guardada");
+  cancelEdit();
+  await loadEmpresas();
+  await selectEmpresa(S.selEmpresa.id);
+}
+
+async function delEmpresa() {
+  if (!S.selEmpresa) return;
+  if (!confirm(`¿Eliminar "${S.selEmpresa.nombre}" y todos sus datos?`)) return;
+  const r = await DEL(`/api/empresas/${S.selEmpresa.id}`);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Empresa eliminada");
+  S.selEmpresa = null;
+  document.getElementById("detail-name").textContent = "Seleccioná una empresa";
+  document.getElementById("detail-name").style.color = "var(--muted)";
+  enableDetailBtns(false);
+  document.getElementById("con-body").innerHTML = "";
+  document.getElementById("cot-body").innerHTML = "";
+  await Promise.all([loadEmpresas(), loadStats()]);
+}
+
+// ── Nueva empresa modal ───────────────────────────────────────────────────────
+function showNewEmpresa() {
+  document.getElementById("modal-empresa-title").textContent = "Nueva Empresa";
+  ["me-nombre","me-telefono","me-direccion","me-pais","me-email","me-rubro","me-tags"]
+    .forEach(id => document.getElementById(id).value = "");
+  openModal("modal-empresa");
+}
+
+async function saveEmpresaModal() {
+  const body = {
+    nombre:    document.getElementById("me-nombre").value.trim(),
+    direccion: document.getElementById("me-direccion").value.trim(),
+    telefono:  document.getElementById("me-telefono").value.trim(),
+    email:     document.getElementById("me-email").value.trim(),
+    rubro:     document.getElementById("me-rubro").value.trim(),
+    pais:      document.getElementById("me-pais").value.trim(),
+    tags:      document.getElementById("me-tags").value.trim(),
+  };
+  if (!body.nombre) { toast("El nombre es obligatorio","err"); return; }
+  const r = await POST("/api/empresas", body);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Empresa creada");
+  closeModal("modal-empresa");
+  await loadEmpresas();
+  if (r.data?.id) selectEmpresa(r.data.id);
+  loadStats();
+}
+
+// ── Contactos ─────────────────────────────────────────────────────────────────
+async function loadContactos() {
+  if (!S.selEmpresa) return;
+  const r = await GET(`/api/empresas/${S.selEmpresa.id}/contactos`);
+  if (!r.ok) return;
+  S.contactos = r.data;
+  renderContactos();
+}
+
+function renderContactos() {
+  S.selContacto = null;
+  document.getElementById("btn-edit-con").disabled = true;
+  document.getElementById("btn-del-con").disabled  = true;
+  document.getElementById("con-body").innerHTML = S.contactos.map((c,i) =>
+    `<tr onclick="selCon(${i})" ${S.selContacto===i?"class='selected'":""}>
+      <td>${esc(c.nombre||"")}</td><td>${esc(c.email||"")}</td>
+      <td>${esc(c.telefono||"")}</td><td>${esc(c.pais||"")}</td>
+    </tr>`
+  ).join("") || '<tr><td colspan="4" style="color:var(--muted);padding:8px">Sin contactos</td></tr>';
+}
+
+function selCon(i) {
+  S.selContacto = i;
+  document.querySelectorAll("#con-body tr").forEach((tr,j) =>
+    tr.classList.toggle("selected", j===i));
+  document.getElementById("btn-edit-con").disabled = false;
+  document.getElementById("btn-del-con").disabled  = false;
+}
+
+function showAddContacto() {
+  document.getElementById("modal-contacto-title").textContent = "Agregar Contacto";
+  ["mc-nombre","mc-email","mc-telefono","mc-pais"].forEach(id =>
+    document.getElementById(id).value = "");
+  S._editContactoId = null;
+  openModal("modal-contacto");
+}
+
+function showEditContacto() {
+  if (S.selContacto === null) return;
+  const c = S.contactos[S.selContacto];
+  document.getElementById("modal-contacto-title").textContent = "Editar Contacto";
+  document.getElementById("mc-nombre").value   = c.nombre||"";
+  document.getElementById("mc-email").value    = c.email||"";
+  document.getElementById("mc-telefono").value = c.telefono||"";
+  document.getElementById("mc-pais").value     = c.pais||"";
+  S._editContactoId = c.id;
+  openModal("modal-contacto");
+}
+
+async function saveContacto() {
+  const body = {
+    nombre:   document.getElementById("mc-nombre").value.trim(),
+    email:    document.getElementById("mc-email").value.trim(),
+    telefono: document.getElementById("mc-telefono").value.trim(),
+    pais:     document.getElementById("mc-pais").value.trim(),
+  };
+  if (!body.nombre || !body.email) { toast("Nombre y email son obligatorios","err"); return; }
+  let r;
+  if (S._editContactoId) {
+    r = await PUT(`/api/contactos/${S._editContactoId}`, body);
+  } else {
+    r = await POST(`/api/empresas/${S.selEmpresa.id}/contactos`, body);
+  }
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Contacto guardado");
+  closeModal("modal-contacto");
+  await loadContactos();
+  loadStats();
+}
+
+async function delContacto() {
+  if (S.selContacto === null) return;
+  const c = S.contactos[S.selContacto];
+  if (!confirm("¿Eliminar contacto?")) return;
+  const r = await DEL(`/api/contactos/${c.id}`);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Contacto eliminado");
+  await loadContactos();
+  loadStats();
+}
+
+// ── Cotizaciones ──────────────────────────────────────────────────────────────
+async function loadCotizaciones() {
+  if (!S.selEmpresa) return;
+  const r = await GET(`/api/empresas/${S.selEmpresa.id}/cotizaciones`);
+  if (!r.ok) return;
+  S.cotizaciones = r.data;
+  renderCotizaciones();
+}
+
+// Cotizacion sort state
+const CS = { col: 'fecha', asc: false };
+
+function sortCot(col) {
+  if (CS.col === col) CS.asc = !CS.asc;
+  else { CS.col = col; CS.asc = true; }
+  ['fecha','desc','tipo','monto'].forEach(c => {
+    const el = document.getElementById('csort-' + c);
+    if (el) el.textContent = c === col ? (CS.asc ? ' ↑' : ' ↓') : '';
+  });
+  renderCotizaciones();
+}
+
+function renderCotizaciones() {
+  S.selCotizacion = null;
+  ["btn-edit-cot","btn-resumir","btn-del-cot"].forEach(id =>
+    document.getElementById(id).disabled = true);
+  document.getElementById("cot-resumen-txt").textContent = "—";
+  document.getElementById("cot-body").innerHTML = S.cotizaciones.map((c,i) => {
+    let desc = c.descripcion||"", tipo = c.tipo||"";
+    if (!tipo && desc.startsWith("[") && desc.includes("]")) {
+      tipo = desc.slice(1, desc.indexOf("]"));
+      desc = desc.slice(desc.indexOf("]")+2).trim();
+    }
+    const arch = c.nombre_archivo || desc;
+    const monto = parseFloat(c.monto||0).toLocaleString("es-AR",{minimumFractionDigits:2});
+    return `<tr onclick="selCot(${i})" ondblclick="abrirArchivoCot(${i})">
+      <td>${esc(c.fecha_fmt||"")}</td>
+      <td>${esc(arch)}</td>
+      <td>${esc(tipo)}</td>
+      <td>${esc(c.estado_ia||"")}</td>
+      <td style="text-align:right">${esc(c.moneda||"$")}${monto}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" style="color:var(--muted);padding:8px">Sin cotizaciones</td></tr>';
+}
+
+function selCot(i, evt) {
+  if (evt && evt.detail === 2) { openCotizacionArchivo(i); return; }
+  S.selCotizacion = i;
+  document.querySelectorAll("#cot-body tr").forEach((tr,j) =>
+    tr.classList.toggle("selected", j===i));
+  ["btn-edit-cot","btn-resumir","btn-del-cot"].forEach(id =>
+    document.getElementById(id).disabled = false);
+  const c = S.cotizaciones[i];
+  const badge = c.proveedor_ia && c.proveedor_ia !== "none"
+    ? ` [${c.proveedor_ia}]` : "";
+  let monto_txt = "";
+  if (c.monto && parseFloat(c.monto) > 0) {
+    const m = parseFloat(c.monto).toLocaleString("es-AR",{minimumFractionDigits:2});
+    monto_txt = `${c.moneda||"$"}${m}  —  `;
+  }
+  let estado = c.estado_ia ? `[${c.estado_ia}] ` : "";
+  let error = c.error_ia ? ` Error: ${c.error_ia}` : "";
+  document.getElementById("cot-resumen-txt").textContent =
+    c.resumen ? (estado + monto_txt + c.resumen + badge) : (estado + (error || "—"));
+}
+
+function showAddCotizacion() {
+  document.getElementById("modal-cot-title").textContent = "Nueva Cotización";
+  ["mc-desc","mc-monto","mc-fecha"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("mc-tipo").value = "";
+  S._editCotId = null;
+  openModal("modal-cotizacion");
+}
+
+function showEditCotizacion() {
+  if (S.selCotizacion === null) return;
+  const c = S.cotizaciones[S.selCotizacion];
+  document.getElementById("modal-cot-title").textContent = "Editar Cotización";
+  let desc = c.descripcion||"", tipo = c.tipo||"";
+  if (!tipo && desc.startsWith("[") && desc.includes("]")) {
+    tipo = desc.slice(1, desc.indexOf("]"));
+    desc = desc.slice(desc.indexOf("]")+2).trim();
+  }
+  document.getElementById("mc-tipo").value  = tipo;
+  document.getElementById("mc-desc").value  = desc;
+  document.getElementById("mc-monto").value = c.monto||"";
+  document.getElementById("mc-fecha").value = (c.fecha||"").slice(0,10);
+  S._editCotId = c.id;
+  openModal("modal-cotizacion");
+}
+
+async function saveCotizacion() {
+  const body = {
+    tipo:        document.getElementById("mc-tipo").value,
+    descripcion: document.getElementById("mc-desc").value.trim(),
+    monto:       parseFloat(document.getElementById("mc-monto").value||0),
+    fecha:       document.getElementById("mc-fecha").value.trim()||null,
+  };
+  if (!body.descripcion) { toast("La descripción es obligatoria","err"); return; }
+  let r;
+  if (S._editCotId) {
+    r = await PUT(`/api/cotizaciones/${S._editCotId}`, body);
+  } else {
+    r = await POST(`/api/empresas/${S.selEmpresa.id}/cotizaciones`, body);
+  }
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Cotización guardada");
+  closeModal("modal-cotizacion");
+  await loadCotizaciones();
+  loadStats();
+}
+
+async function abrirArchivoCot(i) {
+  const c = S.cotizaciones[i];
+  if (!c) return;
+  if (!c.ruta_archivo) {
+    toast("Esta cotización no tiene archivo adjunto","info"); return;
+  }
+  window.open(`/api/cotizaciones/${c.id}/archivo`, "_blank");
+}
+
+async function openCotizacionArchivo(i) {
+  const idx = (i !== undefined) ? i : S.selCotizacion;
+  if (idx === null || idx === undefined) return;
+  const c = S.cotizaciones[idx];
+  if (!c) return;
+  window.open(`/api/cotizaciones/${c.id}/archivo`, "_blank");
+}
+
+async function delCotizacion() {
+  if (S.selCotizacion === null) return;
+  const c = S.cotizaciones[S.selCotizacion];
+  if (!confirm("¿Eliminar cotización?")) return;
+  const r = await DEL(`/api/cotizaciones/${c.id}`);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Cotización eliminada");
+  await loadCotizaciones();
+  loadStats();
+}
+
+async function pollEstadoIA(cid, eid, attempts=0) {
+  const MAX = 30;
+  if (attempts >= MAX) { toast("Tiempo de espera agotado para el resumen","err"); return; }
+  try {
+    const r = await GET(`/api/cotizaciones/${cid}/estado_ia`);
+    if (!r.ok) return;
+    const s = r.data.estado_ia || "";
+    if (s === "ok") {
+      toast("Resumen generado");
+      loadCotizaciones();
+    } else if (s === "error") {
+      toast("Error en resumen: " + (r.data.error_ia || "desconocido"), "err");
+      loadCotizaciones();
+    } else {
+      setTimeout(() => pollEstadoIA(cid, eid, attempts+1), 2000);
+    }
+  } catch(e) {
+    setTimeout(() => pollEstadoIA(cid, eid, attempts+1), 3000);
+  }
+}
+
+async function doResumirCot() {
+  if (S.selCotizacion === null) return;
+  const c = S.cotizaciones[S.selCotizacion];
+  if (!confirm("¿Regenerar el resumen IA? Puede tardar unos segundos.")) return;
+  const r = await POST(`/api/cotizaciones/${c.id}/resumen`);
+  if (!r.ok) { toast(r.error||"Sin archivo adjunto","err"); return; }
+  toast("Generando resumen…","info");
+  // Poll until estado_ia changes from 'procesando'
+  let attempts = 0;
+  const poll = setInterval(async () => {
+    attempts++;
+    await loadCotizaciones();
+    const updated = S.cotizaciones[S.selCotizacion];
+    const estado  = updated && updated.estado_ia;
+    if (estado === "ok" || estado === "error" || attempts > 30) {
+      clearInterval(poll);
+      if (estado === "ok") toast("Resumen generado");
+      else if (estado === "error") toast("Error al generar resumen","err");
+    }
+  }, 2000);
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+function switchTab(t) {
+  document.querySelectorAll(".tab").forEach((el,i) =>
+    el.classList.toggle("active", ["empresa","cotizaciones"][i] === t));
+  document.querySelectorAll(".tab-panel").forEach(el =>
+    el.classList.remove("active"));
+  document.getElementById("tab-"+t).classList.add("active");
+}
+
+// ── Historial ─────────────────────────────────────────────────────────────────
+async function showHistorial() {
+  if (!S.selEmpresa) return;
+  const r = await GET(`/api/empresas/${S.selEmpresa.id}/historial`);
+  if (!r.ok) return;
+  S.histRows = r.data; S.histSel = null;
+  document.getElementById("modal-hist-title").textContent =
+    `Historial: ${S.selEmpresa.nombre}`;
+  renderHistorial();
+  openModal("modal-historial");
+}
+
+const FUENTE_COLORS = {
+  "usuario":"fuente-usuario","gemini":"fuente-gemini",
+  "grok":"fuente-grok","importacion":"fuente-importacion"
+};
+function renderHistorial() {
+  document.getElementById("btn-revertir").disabled = true;
+  document.getElementById("btn-del-hist").disabled = true;
+  document.getElementById("hist-sel-info").textContent = "";
+  document.getElementById("hist-body").innerHTML = S.histRows.map((h,i) => {
+    const cls = FUENTE_COLORS[h.fuente?.split(" ")[0]] || "";
+    const fecha = (h.fecha||"").slice(0,16).replace("T"," ");
+    return `<tr class="${cls}" onclick="selHist(${i})">
+      <td>${esc(fecha)}</td><td>${esc(h.campo||"")}</td>
+      <td>${esc(h.valor_anterior||"")}</td><td>${esc(h.valor_nuevo||"")}</td>
+      <td>${esc(h.fuente||"")}</td>
+      <td><button class="btn btn-ghost" style="padding:2px 6px;font-size:10px"
+          onclick="event.stopPropagation();selHist(${i})">Sel</button></td>
+    </tr>`;
+  }).join("") || '<tr><td colspan="6" style="text-align:center;padding:16px;color:var(--muted)">Sin cambios registrados</td></tr>';
+}
+
+function selHist(i) {
+  S.histSel = i;
+  document.querySelectorAll("#hist-body tr").forEach((tr,j) =>
+    tr.classList.toggle("selected", j===i));
+  const h = S.histRows[i];
+  document.getElementById("hist-sel-info").textContent =
+    `${h.campo}: "${h.valor_anterior}" → "${h.valor_nuevo}"`;
+  document.getElementById("btn-revertir").disabled = false;
+  document.getElementById("btn-del-hist").disabled = false;
+}
+
+async function revertirCambio() {
+  if (S.histSel === null) return;
+  const h = S.histRows[S.histSel];
+  if (!confirm(`¿Revertir '${h.campo}' a "${h.valor_anterior}"?`)) return;
+  const r = await POST(`/api/historial/${h.id}/revertir`);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Cambio revertido");
+  await showHistorial();
+  await selectEmpresa(S.selEmpresa.id);
+}
+
+async function delCambio() {
+  if (S.histSel === null) return;
+  const h = S.histRows[S.histSel];
+  if (!confirm("¿Eliminar este registro del historial?")) return;
+  const r = await DEL(`/api/historial/${h.id}`);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Registro eliminado");
+  await showHistorial();
+}
+
+// ── Validar ───────────────────────────────────────────────────────────────────
+function showValidar() {
+  if (!S.selEmpresa) return;
+  const q = encodeURIComponent(S.selEmpresa.nombre + " empresa");
+  window.open(`https://www.google.com/search?q=${q}`, "_blank");
+}
+
+// ── Búsqueda global ───────────────────────────────────────────────────────────
+async function showSearch() {
+  S.srchPage = 0; S.srchRows = []; S.srchSel = null;
+  openModal("search-modal");
+  // Load tipos dynamically
+  const rt = await GET("/api/meta/tipos_cotizacion");
+  if (rt.ok) {
+    const sel = document.getElementById("sq-tipo");
+    while (sel.options.length > 1) sel.remove(1);
+    (rt.data||[]).forEach(t => sel.add(new Option(t, t)));
+  }
+  doSearch();
+}
+
+let _srchTimer;
+async function doSearch() {
+  clearTimeout(_srchTimer);
+  _srchTimer = setTimeout(async () => {
+    const params = new URLSearchParams({
+      q:       document.getElementById("sq-q").value,
+      empresa: document.getElementById("sq-emp").value,
+      page:    S.srchPage,
+      page_size: 200,
+    });
+    const mmin = document.getElementById("sq-mmin").value;
+    const mmax = document.getElementById("sq-mmax").value;
+    const tipo = document.getElementById("sq-tipo").value;
+    const per  = document.getElementById("sq-per").value;
+    const tipo = document.getElementById("sq-tipo").value;
+    if (mmin) params.set("monto_min", mmin);
+    if (mmax) params.set("monto_max", mmax);
+    if (tipo) params.set("tipo", tipo);
+    if (per)  params.set("periodo", per);
+    if (tipo) params.set("tipo", tipo);
+    const r = await GET("/api/buscar?" + params);
+    if (!r.ok) return;
+    S.srchRows = r.data; S.srchSel = null;
+    const pages = r.pages||1;
+    document.getElementById("srch-info").textContent =
+      `${r.total||0} resultado(s)`;
+    document.getElementById("srch-total").textContent =
+      r.total > 0 ? `Total: $${parseFloat(r.total_monto||0).toLocaleString("es-AR",{minimumFractionDigits:2})}` : "";
+    document.getElementById("srch-pg").textContent =
+      pages > 1 ? `${S.srchPage+1}/${pages}` : "";
+    document.getElementById("srch-prev").disabled = S.srchPage === 0;
+    document.getElementById("srch-next").disabled = S.srchPage >= pages-1;
+    document.getElementById("srch-goto").disabled = true;
+    document.getElementById("srch-body").innerHTML = S.srchRows.map((c,i) => {
+      let desc = c.descripcion||"", tipo = c.tipo||"";
+      if (!tipo && desc.startsWith("[") && desc.includes("]")) {
+        tipo = desc.slice(1,desc.indexOf("]"));
+        desc = desc.slice(desc.indexOf("]")+2).trim();
+      }
+      const monto = parseFloat(c.monto||0).toLocaleString("es-AR",{minimumFractionDigits:2});
+      return `<tr onclick="selSrch(${i})">
+        <td>${esc(c.fecha_fmt||"")}</td><td>${esc(c.empresa_nombre||"")}</td>
+        <td>${esc(desc)}</td><td>${esc(tipo)}</td>
+        <td style="text-align:right">$${monto}</td>
+      </tr>`;
+    }).join("") || '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--muted)">Sin resultados</td></tr>';
+  }, 300);
+}
+
+function selSrch(i) {
+  S.srchSel = i;
+  document.querySelectorAll("#srch-body tr").forEach((tr,j) =>
+    tr.classList.toggle("selected", j===i));
+  document.getElementById("srch-goto").disabled = false;
+}
+
+function srchPage(d) {
+  S.srchPage = Math.max(0, S.srchPage + d);
+  doSearch();
+}
+
+function clearSearch() {
+  ["sq-q","sq-emp","sq-mmin","sq-mmax"].forEach(id =>
+    document.getElementById(id).value = "");
+  document.getElementById("sq-tipo").value = "";
+  document.getElementById("sq-per").value  = "";
+  document.getElementById("sq-tipo").value = "";
+  S.srchPage = 0; doSearch();
+}
+
+async function gotoEmpresaFromSearch() {
+  if (S.srchSel === null) return;
+  const c = S.srchRows[S.srchSel];
+  closeModal("search-modal");
+  await selectEmpresa(c.empresa_id);
+  // Scroll to selected in list
+  const row = document.querySelector(`#list-body tr[data-id="${c.empresa_id}"]`);
+  if (row) row.scrollIntoView({block:"nearest"});
+}
+
+// ── Duplicados ────────────────────────────────────────────────────────────────
+async function showDupes() {
+  openModal("dupes-modal");
+  loadDupes();
+}
+
+async function loadDupes() {
+  const thresh = document.getElementById("dupes-thresh").value || 85;
+  document.getElementById("dupes-status").textContent = "Buscando…";
+  document.getElementById("dupes-body").innerHTML =
+    '<tr><td colspan="4" style="text-align:center;padding:16px"><div class="spinner"></div></td></tr>';
+  const r = await GET(`/api/duplicados?umbral=${thresh}`);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  const pares = r.data;
+  document.getElementById("dupes-status").textContent =
+    `${pares.length} par(es) encontrado(s)`;
+  document.getElementById("dupes-body").innerHTML = pares.map((p,i) => {
+    const cls = p.similitud >= 90 ? "style='background:var(--row-g)'" : "style='background:var(--row-a)'";
+    return `<tr ${cls}>
+      <td>${esc(p.nombre1)}</td><td>${esc(p.nombre2)}</td>
+      <td>${p.similitud}%</td>
+      <td style="display:flex;gap:4px;padding:4px 8px">
+        <button class="btn btn-warn" onclick="mergeEmpresas(${p.id1},'${esc(p.nombre1)}',${p.id2},'${esc(p.nombre2)}')" style="font-size:10px;padding:2px 8px">A→B</button>
+        <button class="btn btn-warn" onclick="mergeEmpresas(${p.id2},'${esc(p.nombre2)}',${p.id1},'${esc(p.nombre1)}')" style="font-size:10px;padding:2px 8px">B→A</button>
+      </td>
+    </tr>`;
+  }).join("") || '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--muted)">Sin duplicados ✓</td></tr>';
+}
+
+async function mergeEmpresas(origenId, origenNom, destinoId, destinoNom) {
+  if (!confirm(`¿Fusionar "${origenNom}" → "${destinoNom}"?\nEsto eliminará "${origenNom}".`)) return;
+  const r = await POST("/api/duplicados/merge", {origen_id: origenId, destino_id: destinoId});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast(`Fusionado: "${origenNom}" → "${destinoNom}"`);
+  await Promise.all([loadEmpresas(), loadStats()]);
+  loadDupes();
+}
+
+// ── Importar CSV ──────────────────────────────────────────────────────────────
+function showImportCSV() {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".csv";
+  inp.onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    const fd = new FormData(); fd.append("file", file);
+    toast("Importando CSV…","info");
+    const r = await POST("/api/importar/csv", fd);
+    if (!r.ok) { toast(r.error||"Error","err"); return; }
+    toast(`Importados: ${r.data.importados} | Omitidos: ${r.data.omitidos} | Errores: ${r.data.errores}`);
+    await Promise.all([loadEmpresas(), loadStats()]);
+  };
+  inp.click();
+}
+
+function showImportGoogle() { showImportCSV(); } // same endpoint
+
+// ── Importar carpeta ──────────────────────────────────────────────────────────
+function showImportCarpeta() { openModal("importer-modal"); }
+
+async function escanear() {
+  const path   = document.getElementById("imp-path").value.trim();
+  if (!path) { toast("Ingresá una ruta","err"); return; }
+  toast("Escaneando…","info");
+  const r = await POST("/api/escanear", {path});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  S.scanRows = r.data;
+  const thresh = parseInt(document.getElementById("imp-thresh").value)||90;
+  document.getElementById("scan-info").textContent =
+    `${r.total} archivo(s) encontrado(s)`;
+  document.getElementById("scan-table-wrap").style.display = "";
+  document.getElementById("btn-imp-auto").disabled = false;
+  document.getElementById("btn-imp-sel").disabled  = false;
+  renderScanTable(thresh);
+}
+
+function renderScanTable(thresh) {
+  const empresas = Object.fromEntries(
+    S.allEmpresas.map(e => [e.id, e.nombre]));
+  document.getElementById("scan-body").innerHTML = S.scanRows.map((row,i) => {
+    const cls = row.sim >= thresh ? "sim-high" : row.sim >= 60 ? "sim-med" : "sim-low";
+    const opts = S.allEmpresas.map(e =>
+      `<option value="${e.id}" ${e.id===row.eid?"selected":""}>${esc(e.nombre)}</option>`
+    ).join("");
+    return `<tr class="${cls}" id="scan-row-${i}">
+      <td><input type="checkbox" class="scan-chk" data-i="${i}" checked></td>
+      <td>${esc(row.file_name)}</td>
+      <td>${esc(row.carpeta)}</td>
+      <td>${esc(row.sugerida)}</td>
+      <td>${row.sim}%</td>
+      <td><select class="scan-emp-sel" data-i="${i}" style="font-size:11px;max-width:160px">
+        <option value="">— Sin empresa —</option>${opts}
+      </select></td>
+    </tr>`;
+  }).join("");
+  // sync eid on change
+  document.querySelectorAll(".scan-emp-sel").forEach(sel => {
+    sel.addEventListener("change", e => {
+      S.scanRows[+e.target.dataset.i].eid = +e.target.value||null;
+    });
+  });
+}
+
+function toggleAll(chk) {
+  document.querySelectorAll(".scan-chk").forEach(c => c.checked = chk.checked);
+}
+
+async function importarAuto() {
+  const thresh = parseInt(document.getElementById("imp-thresh").value)||90;
+  const items = S.scanRows
+    .filter(r => r.sim >= thresh && r.eid)
+    .map(r => ({empresa_id: r.eid, file_path: r.file_path, file_name: r.file_name}));
+  if (!items.length) { toast("Sin archivos con ese umbral","err"); return; }
+  await doImportItems(items);
+}
+
+async function importarSeleccionados() {
+  const items = [];
+  document.querySelectorAll(".scan-chk:checked").forEach(chk => {
+    const i = +chk.dataset.i;
+    const r = S.scanRows[i];
+    if (r.eid) items.push({empresa_id: r.eid, file_path: r.file_path, file_name: r.file_name});
+  });
+  if (!items.length) { toast("Sin archivos seleccionados con empresa asignada","err"); return; }
+  await doImportItems(items);
+}
+
+async function doImportItems(items) {
+  toast("Importando…","info");
+  const r = await POST("/api/importar/carpeta", {items});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast(`Importados: ${r.data.importados} | Errores: ${r.data.errores}`);
+  await Promise.all([loadStats()]);
+  if (S.selEmpresa) loadCotizaciones();
+}
+
+// ── Filtros ─────────────────────────────────────────────────────────────────
+async function showFilters() {
+  // Load saved filter presets from config
+  const r = await GET("/api/config");
+  if (r.ok) {
+    const saved = r.data.filtros_guardados || {};
+    const bar = document.getElementById("filtros-guardados-bar");
+    bar.innerHTML = Object.keys(saved).length
+      ? Object.keys(saved).map(n =>
+          `<button class="btn btn-accent" style="font-size:10px;padding:3px 8px"
+           onclick="loadFilterPreset('${esc(n)}')">${esc(n)}</button>
+           <button class="btn btn-danger" style="font-size:10px;padding:3px 5px"
+           onclick="deleteFilterPreset('${esc(n)}')" title="Eliminar">×</button>`
+        ).join("") + '<span style="font-size:10px;color:var(--muted);margin-left:4px">Presets guardados</span>'
+      : '<span style="font-size:10px;color:var(--muted)">Sin presets guardados</span>';
+  }
+  openModal("filters-modal");
+}
+
+async function saveFilterPreset() {
+  const nombre = prompt("Nombre para este filtro:");
+  if (!nombre) return;
+  const f = currentFiltersFromModal();
+  const r = await POST("/api/config/filtros", {nombre, filtros: f});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast(`Filtro '${nombre}' guardado`);
+}
+
+async function loadFilterPreset(nombre) {
+  const r = await GET("/api/config");
+  if (!r.ok) return;
+  const f = (r.data.filtros_guardados || {})[nombre];
+  if (!f) return;
+  document.getElementById("fl-pais").value  = f.pais  || "";
+  document.getElementById("fl-rubro").value = f.rubro || "";
+  document.getElementById("fl-tag").value   = f.tag   || "";
+  document.getElementById("fl-cot").value   = f.cotizaciones_cond || "";
+  document.getElementById("fl-con").value   = f.contactos_cond    || "";
+  document.getElementById("fl-dias").value  = f.dias_cotizacion   || 0;
+}
+
+async function deleteFilterPreset(nombre) {
+  const r = await fetch(`/api/config/filtros/${encodeURIComponent(nombre)}`,
+                        {method:"DELETE"});
+  const data = await r.json();
+  if (!data.ok) { toast("Error","err"); return; }
+  toast(`Filtro '${nombre}' eliminado`);
+  showFilters(); // refresh bar
+}
+
+function currentFiltersFromModal() {
+  const f = {};
+  const pais  = document.getElementById("fl-pais").value;
+  const rubro = document.getElementById("fl-rubro").value;
+  const tag   = document.getElementById("fl-tag").value;
+  const cot   = document.getElementById("fl-cot").value;
+  const con   = document.getElementById("fl-con").value;
+  const dias  = parseInt(document.getElementById("fl-dias").value)||0;
+  if (pais)  f.pais  = pais;
+  if (rubro) f.rubro = rubro;
+  if (tag)   f.tag   = tag;
+  if (cot)   f.cotizaciones_cond = cot;
+  if (con)   f.contactos_cond    = con;
+  if (dias)  f.dias_cotizacion   = dias;
+  return f;
+}
+
+async function loadFilterPreset(nombre) {
+  const r = await GET("/api/config");
+  if (!r.ok) return;
+  const f = (r.data.filtros_guardados || {})[nombre];
+  if (!f) return;
+  document.getElementById("fl-pais").value  = f.pais  || "";
+  document.getElementById("fl-rubro").value = f.rubro || "";
+  document.getElementById("fl-tag").value   = f.tag   || "";
+  document.getElementById("fl-cot").value   = f.cotizaciones_cond || "";
+  document.getElementById("fl-con").value   = f.contactos_cond    || "";
+  document.getElementById("fl-dias").value  = f.dias_cotizacion   || "0";
+}
+
+async function saveFilterPreset() {
+  const nombre = prompt("Nombre para este filtro:");
+  if (!nombre) return;
+  const f = {};
+  const pais = document.getElementById("fl-pais").value;
+  const rubro = document.getElementById("fl-rubro").value;
+  const tag   = document.getElementById("fl-tag").value;
+  const cot   = document.getElementById("fl-cot").value;
+  const con   = document.getElementById("fl-con").value;
+  const dias  = parseInt(document.getElementById("fl-dias").value)||0;
+  if (pais)  f.pais  = pais;
+  if (rubro) f.rubro = rubro;
+  if (tag)   f.tag   = tag;
+  if (cot)   f.cotizaciones_cond = cot;
+  if (con)   f.contactos_cond    = con;
+  if (dias)  f.dias_cotizacion   = dias;
+  const r = await POST("/api/config/filtros", {nombre, filtros: f});
+  if (r.ok) { toast(`Filtro "${nombre}" guardado`); showFilters(); }
+  else toast(r.error || "Error", "err");
+}
+
+function applyFilters() {
+  const f = {};
+  const pais = document.getElementById("fl-pais").value;
+  const rubro = document.getElementById("fl-rubro").value;
+  const tag   = document.getElementById("fl-tag").value;
+  const cot   = document.getElementById("fl-cot").value;
+  const con   = document.getElementById("fl-con").value;
+  const dias  = parseInt(document.getElementById("fl-dias").value)||0;
+  if (pais)  f.pais  = pais;
+  if (rubro) f.rubro = rubro;
+  if (tag)   f.tag   = tag;
+  if (cot)   f.cotizaciones_cond = cot;
+  if (con)   f.contactos_cond    = con;
+  if (dias)  f.dias_cotizacion   = dias;
+  S.filters = f;
+  const n = Object.keys(f).length;
+  document.getElementById("filter-badge").textContent = n ? `● ${n}` : "";
+  closeModal("filters-modal");
+  loadEmpresas();
+}
+
+function clearFilters() {
+  ["fl-pais","fl-rubro","fl-tag","fl-cot","fl-con"].forEach(id =>
+    document.getElementById(id).value = "");
+  document.getElementById("fl-dias").value = "0";
+  S.filters = {};
+  document.getElementById("filter-badge").textContent = "";
+  closeModal("filters-modal");
+  loadEmpresas();
+}
+
+// ── Enriquecedor ──────────────────────────────────────────────────────────────
+function showEnriquecer() { openModal("enricher-modal"); }
+
+async function runEnriquecedor() {
+  const body = {
+    provider:       document.getElementById("en-provider").value,
+    limit:          +document.getElementById("en-limit").value,
+    min_confidence: +document.getElementById("en-conf").value,
+    only:           document.getElementById("en-only").value.trim()||null,
+    apply:          document.getElementById("en-apply").checked,
+  };
+  document.getElementById("en-status").textContent = "Ejecutando…";
+  document.getElementById("en-results").style.display = "none";
+  const r = await POST("/api/enriquecer", body);
+  if (!r.ok) {
+    document.getElementById("en-status").textContent = "Error: " + (r.error||"");
+    return;
+  }
+  const results = r.data.results||[];
+  if (body.apply) {
+    document.getElementById("en-status").textContent =
+      `Actualizadas: ${r.data.updated||0} | Omitidas: ${r.data.skipped||0}`;
+    await Promise.all([loadEmpresas(), loadStats()]);
+  } else {
+    document.getElementById("en-status").textContent =
+      `${r.data.candidates||0} empresa(s) para actualizar`;
+  }
+  document.getElementById("en-results").style.display = "";
+  document.getElementById("en-body").innerHTML = results.map(res => {
+    const same = (res.current_name||"").toLowerCase() === (res.canonical_name||"").toLowerCase();
+    return `<tr>
+      <td>${esc(res.current_name||"")}</td>
+      <td style="${!same?"font-weight:600;color:var(--accent)":""}">${esc(res.canonical_name||"")}</td>
+      <td>${((res.confidence||0)*100).toFixed(0)}%</td>
+      <td>${res.should_update && !same ? "✓" : "—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+
+// ── Diagnóstico / Verificación ───────────────────────────────────────────────
+function renderKeyValueTable(obj) {
+  return Object.entries(obj || {}).map(([k,v]) => {
+    let val = (v && typeof v === 'object') ? JSON.stringify(v) : String(v);
+    let warn = (typeof v === 'number' && v > 0 && !['total_rutas_archivo'].includes(k)) ? 'color:var(--danger);font-weight:700' : '';
+    return `<tr><td style="font-weight:700;width:240px">${esc(k)}</td><td style="${warn}">${esc(val)}</td></tr>`;
+  }).join('');
+}
+
+async function showDiagnostico() {
+  document.getElementById('diag-title').textContent = 'Diagnóstico de datos';
+  document.getElementById('diag-status').textContent = 'Revisando base y rutas…';
+  document.getElementById('diag-body').innerHTML = '';
+  openModal('diagnostico-modal');
+  const r = await GET('/api/diagnostico');
+  if (!r.ok) { document.getElementById('diag-status').textContent = r.error || 'Error'; return; }
+  document.getElementById('diag-status').textContent = `Actualizado: ${r.data.timestamp || ''}`;
+  document.getElementById('diag-body').innerHTML = renderKeyValueTable(r.data);
+}
+
+async function showVerificacion() {
+  document.getElementById('diag-title').textContent = 'Verificación de instalación';
+  document.getElementById('diag-status').textContent = 'Verificando dependencias y esquema…';
+  document.getElementById('diag-body').innerHTML = '';
+  openModal('diagnostico-modal');
+  const r = await GET('/api/verificar');
+  if (!r.ok) { document.getElementById('diag-status').textContent = r.error || 'Error'; return; }
+  document.getElementById('diag-status').textContent = 'Resultado de verificación';
+  const flat = {...r.data};
+  flat.dependencias = Object.entries(r.data.dependencias || {}).map(([k,v]) => `${k}: ${v?'OK':'FALTA'}`).join(' | ');
+  flat.diagnostico = JSON.stringify(r.data.diagnostico || {});
+  document.getElementById('diag-body').innerHTML = renderKeyValueTable(flat);
+}
+
+// ── Export / Backup ───────────────────────────────────────────────────────────
+function showExportMenu() { openModal("export-modal"); }
+
+async function doExportConfirm() {
+  const fmt  = document.getElementById("exp-fmt").value;
+  const tipo = document.getElementById("exp-tipo").value;
+  closeModal("export-modal");
+  toast("Generando exportación…","info");
+  window.location.href = `/api/exportar?fmt=${fmt}&tipo=${tipo}`;
+}
+
+async function doExport(fmt) {
+  window.location.href = `/api/exportar?fmt=${fmt}`;
+}
+
+async function doBackup() {
+  const r = await POST("/api/backup");
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Backup creado");
+}
+
+async function doRestore() {
+  if (!confirm("¿Restaurar el último backup? Los datos actuales se reemplazarán.")) return;
+  const r = await POST("/api/backup/restaurar");
+  if (!r.ok) { toast(r.error||"Sin backup disponible","err"); return; }
+  toast("Backup restaurado");
+  await Promise.all([loadEmpresas(), loadStats()]);
+}
+
+// ── Modal helpers ─────────────────────────────────────────────────────────────
+function openModal(id) {
+  document.querySelectorAll("#overlay .modal").forEach(m => m.style.display="none");
+  document.getElementById(id).style.display = "";
+  document.getElementById("overlay").classList.add("show");
+}
+
+function closeModal(id) {
+  document.getElementById(id).style.display = "none";
+  document.getElementById("overlay").classList.remove("show");
+}
+
+document.getElementById("overlay").addEventListener("click", e => {
+  if (e.target === document.getElementById("overlay")) {
+    document.getElementById("overlay").classList.remove("show");
+  }
+});
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") document.getElementById("overlay").classList.remove("show");
+  if (e.key === "Enter" && document.getElementById("overlay").classList.contains("show")) {
+    const activeModal = document.querySelector("#overlay .modal:not([style*='display: none'])");
+    if (!activeModal) return;
+    const saveBtns = activeModal.querySelectorAll(".modal-footer .btn-primary");
+    if (saveBtns.length === 1) saveBtns[0].click();
+  }
+});
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")
+                      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
