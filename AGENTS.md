@@ -48,3 +48,4 @@ GROK_API_KEY     → Grok 3 mini (fallback)
 HOST             → default 0.0.0.0
 PORT             → default 5000
 ```
+# Develop branch
