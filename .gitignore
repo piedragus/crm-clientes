@@ -1,0 +1,38 @@
+# Base de datos y backups
+*.db
+*.db-wal
+*.db-shm
+backups/
+reportes/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+
+# Config local (puede tener API keys)
+app_config.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Temp
+*.tmp
+*.bak
