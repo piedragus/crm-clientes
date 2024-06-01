@@ -299,6 +299,46 @@ def get_cotizacion_archivo(cid):
         return err("Archivo no disponible en este servidor", 404)
     return send_file(ruta, as_attachment=False)
 
+
+# ── Actividades ───────────────────────────────────────────────────────────────
+@app.route("/api/empresas/<int:eid>/actividades")
+def get_actividades(eid):
+    return ok(rows_to_list(db.get_actividades_empresa(eid)))
+
+
+@app.route("/api/empresas/<int:eid>/actividades", methods=["POST"])
+def post_actividad(eid):
+    b = request.json or {}
+    texto = clean(b.get("texto"))
+    if not texto: return err("El texto es obligatorio")
+    ok2 = db.agregar_actividad(eid, b.get("tipo","nota"), texto,
+                               b.get("usuario","usuario"))
+    if not ok2: return err("No se pudo guardar")
+    return ok(), 201
+
+
+@app.route("/api/actividades/<int:aid>", methods=["PUT"])
+def put_actividad(aid):
+    b = request.json or {}
+    texto = clean(b.get("texto"))
+    if not texto: return err("El texto es obligatorio")
+    ok2 = db.editar_actividad(aid, b.get("tipo","nota"), texto)
+    if not ok2: return err("No se pudo guardar")
+    return ok()
+
+
+@app.route("/api/actividades/<int:aid>", methods=["DELETE"])
+def delete_actividad(aid):
+    db.eliminar_actividad(aid)
+    return ok()
+
+
+@app.route("/api/actividades/recientes")
+def get_actividades_recientes():
+    dias  = to_int(request.args.get("dias", 7), 7, lo=1, hi=365)
+    limit = to_int(request.args.get("limit", 50), 50, lo=1, hi=200)
+    return ok(rows_to_list(db.get_actividades_recientes(dias, limit)))
+
 # ── Historial ─────────────────────────────────────────────────────────────────
 @app.route("/api/empresas/<int:eid>/historial")
 def get_historial(eid):

@@ -151,6 +151,14 @@ class DBManager:
                         descripcion TEXT,
                         monto REAL,
                         FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE CASCADE)''',
+                    '''CREATE TABLE IF NOT EXISTS actividades (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        empresa_id  INTEGER NOT NULL,
+                        fecha       TEXT NOT NULL,
+                        tipo        TEXT,
+                        texto       TEXT,
+                        usuario     TEXT DEFAULT 'usuario',
+                        FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE CASCADE)''',
                     '''CREATE TABLE IF NOT EXISTS cambios (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         empresa_id INTEGER,
@@ -319,6 +327,8 @@ class DBManager:
                 indices = [
                     "CREATE INDEX IF NOT EXISTS idx_empresas_nombre ON empresas (nombre)",
                     "CREATE INDEX IF NOT EXISTS idx_contactos_empresa_id ON contactos (empresa_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_actividades_empresa_id ON actividades (empresa_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_actividades_fecha ON actividades (fecha DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_cambios_empresa_id ON cambios (empresa_id)",
                     "CREATE INDEX IF NOT EXISTS idx_cambios_fecha ON cambios (fecha DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_cotizaciones_empresa_id ON cotizaciones (empresa_id)"
@@ -903,6 +913,56 @@ class DBManager:
             'hashes_duplicados': scalar("SELECT COUNT(*) n FROM (SELECT archivo_hash FROM cotizaciones WHERE archivo_hash IS NOT NULL AND archivo_hash!='' GROUP BY archivo_hash HAVING COUNT(*)>1)"),
         }
         return data
+
+
+    # ── Actividades / Notas ───────────────────────────────────────────────────
+
+    def agregar_actividad(self, empresa_id: int, tipo: str, texto: str,
+                          usuario: str = "usuario") -> bool:
+        if not empresa_id or not texto or not str(texto).strip():
+            return False
+        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return self.ejecutar(
+            "INSERT INTO actividades (empresa_id, fecha, tipo, texto, usuario) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (empresa_id, fecha, tipo or "nota", str(texto).strip(), usuario))
+
+    def get_actividades_empresa(self, empresa_id: int) -> List[Dict]:
+        return self.fetchall(
+            "SELECT * FROM actividades WHERE empresa_id=? "
+            "ORDER BY fecha DESC, id DESC", (empresa_id,))
+
+    def editar_actividad(self, actividad_id: int, tipo: str, texto: str) -> bool:
+        if not actividad_id or not texto or not str(texto).strip():
+            return False
+        with self._write_lock:
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.execute(
+                        "UPDATE actividades SET tipo=?, texto=? WHERE id=?",
+                        (tipo or "nota", str(texto).strip(), actividad_id))
+                    conn.commit()
+                    return cur.rowcount > 0
+            except Exception as e:
+                logging.error(f"editar_actividad: {e}")
+                return False
+
+    def eliminar_actividad(self, actividad_id: int) -> bool:
+        if not actividad_id:
+            return False
+        return self.ejecutar("DELETE FROM actividades WHERE id=?",
+                             (actividad_id,))
+
+    def get_actividades_recientes(self, dias: int = 7,
+                                  limit: int = 50) -> List[Dict]:
+        from datetime import timedelta
+        desde = (datetime.now() - timedelta(days=dias)).strftime(
+            "%Y-%m-%d %H:%M:%S")
+        return self.fetchall(
+            "SELECT a.*, e.nombre empresa_nombre "
+            "FROM actividades a JOIN empresas e ON a.empresa_id=e.id "
+            "WHERE a.fecha >= ? ORDER BY a.fecha DESC LIMIT ?",
+            (desde, limit))
 
     def registrar_cambio(self, empresa_id: int, campo: str,
                          valor_anterior: str, valor_nuevo: str,
