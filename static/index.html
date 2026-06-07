@@ -206,7 +206,21 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 .spinner{display:inline-block;width:14px;height:14px;
          border:2px solid var(--border);border-top-color:var(--accent);
          border-radius:50%;animation:spin .6s linear infinite}
+
+/* Progress bar */
+#import-progress{
+  position:fixed;bottom:0;left:0;right:0;z-index:300;
+  background:var(--panel);border-top:2px solid var(--accent);
+  padding:10px 20px;display:none;
+  box-shadow:0 -4px 20px rgba(0,0,0,.12)}
+#import-progress.show{display:flex;align-items:center;gap:14px}
+.prog-bar-wrap{flex:1;background:var(--border);border-radius:99px;height:6px;overflow:hidden}
+.prog-bar{height:100%;background:var(--accent);border-radius:99px;
+          transition:width .3s ease;width:0%}
+#prog-label{font-size:12px;color:var(--txt2);white-space:nowrap;min-width:180px}
+#prog-detail{font-size:11px;color:var(--muted);white-space:nowrap}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes prog-indeterminate{0%{margin-left:0%;width:30%}50%{margin-left:40%;width:40%}100%{margin-left:100%;width:0%}}
 .loading-row td{text-align:center;color:var(--muted);padding:20px}
 
 /* Placeholder */
@@ -785,6 +799,14 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
   </div>
 
 </div><!-- /overlay -->
+
+<!-- Progress bar -->
+<div id="import-progress">
+  <div class="spinner"></div>
+  <div id="prog-label">Procesando…</div>
+  <div class="prog-bar-wrap"><div class="prog-bar" id="prog-bar"></div></div>
+  <div id="prog-detail"></div>
+</div>
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -1654,11 +1676,18 @@ function showImportCSV() {
   inp.onchange = async e => {
     const file = e.target.files[0]; if (!file) return;
     const fd = new FormData(); fd.append("file", file);
-    toast("Importando CSV…","info");
-    const r = await POST("/api/importar/csv", fd);
-    if (!r.ok) { toast(r.error||"Error","err"); return; }
-    toast(`Importados: ${r.data.importados} | Omitidos: ${r.data.omitidos} | Errores: ${r.data.errores}`);
-    await Promise.all([loadEmpresas(), loadStats()]);
+    showProgress(`Importando ${file.name}…`, `${(file.size/1024).toFixed(0)} KB`);
+    try {
+      const r = await POST("/api/importar/csv", fd);
+      hideProgress();
+      if (!r.ok) { toast(r.error||"Error","err"); return; }
+      const d = r.data;
+      toast(`✓ Importados: ${d.importados} | Omitidos: ${d.omitidos} | Errores: ${d.errores}`);
+      await Promise.all([loadEmpresas(), loadStats()]);
+    } catch(err) {
+      hideProgress();
+      toast("Error al importar","err");
+    }
   };
   inp.click();
 }
@@ -1671,8 +1700,16 @@ function showImportCarpeta() { openModal("importer-modal"); }
 async function escanear() {
   const path   = document.getElementById("imp-path").value.trim();
   if (!path) { toast("Ingresá una ruta","err"); return; }
-  toast("Escaneando…","info");
-  const r = await POST("/api/escanear", {path});
+  const scanBtn = document.querySelector("#importer-modal .btn-primary");
+  if (scanBtn) { scanBtn.disabled = true; scanBtn.textContent = "Escaneando…"; }
+  showProgress("Escaneando carpeta…", path);
+  let r;
+  try {
+    r = await POST("/api/escanear", {path});
+  } finally {
+    hideProgress();
+    if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = "Escanear"; }
+  }
   if (!r.ok) { toast(r.error||"Error","err"); return; }
   S.scanRows = r.data;
   const thresh = parseInt(document.getElementById("imp-thresh").value)||90;
@@ -1736,12 +1773,39 @@ async function importarSeleccionados() {
 }
 
 async function doImportItems(items) {
-  toast("Importando…","info");
-  const r = await POST("/api/importar/carpeta", {items});
-  if (!r.ok) { toast(r.error||"Error","err"); return; }
-  toast(`Importados: ${r.data.importados} | Errores: ${r.data.errores}`);
-  await Promise.all([loadStats()]);
-  if (S.selEmpresa) loadCotizaciones();
+  const total = items.length;
+  showProgress(`Importando ${total} archivo(s)…`, "0 / " + total, 5);
+  // Disable import buttons
+  ["btn-imp-auto","btn-imp-sel"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = true;
+  });
+  try {
+    // Simulate progress while waiting (server processes in bulk)
+    let fake = 5;
+    const ticker = setInterval(() => {
+      fake = Math.min(fake + 3, 85);
+      updateProgress(fake, `Procesando archivos…`);
+    }, 400);
+
+    const r = await POST("/api/importar/carpeta", {items});
+    clearInterval(ticker);
+    hideProgress();
+
+    if (!r.ok) { toast(r.error||"Error","err"); return; }
+    const d = r.data;
+    toast(`✓ ${d.importados} importado(s)${d.errores ? ` | ${d.errores} error(es)` : ""}`);
+    await Promise.all([loadStats()]);
+    if (S.selEmpresa) loadCotizaciones();
+  } catch(err) {
+    hideProgress();
+    toast("Error al importar","err");
+  } finally {
+    ["btn-imp-auto","btn-imp-sel"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = false;
+    });
+  }
 }
 
 // ── Filtros ─────────────────────────────────────────────────────────────────
@@ -2006,6 +2070,34 @@ document.addEventListener("keydown", e => {
     if (saveBtns.length === 1) saveBtns[0].click();
   }
 });
+
+// ── Progress bar ─────────────────────────────────────────────────────────────
+function showProgress(label, detail="", pct=null) {
+  const el = document.getElementById("import-progress");
+  document.getElementById("prog-label").textContent  = label;
+  document.getElementById("prog-detail").textContent = detail;
+  const bar = document.getElementById("prog-bar");
+  if (pct !== null) {
+    bar.style.width = pct + "%";
+  } else {
+    // indeterminate: animate with CSS
+    bar.style.width = "30%";
+    bar.style.animation = "prog-indeterminate 1.2s ease-in-out infinite";
+  }
+  el.classList.add("show");
+}
+
+function updateProgress(pct, detail="") {
+  document.getElementById("prog-bar").style.width = pct + "%";
+  document.getElementById("prog-bar").style.animation = "";
+  if (detail) document.getElementById("prog-detail").textContent = detail;
+}
+
+function hideProgress() {
+  document.getElementById("import-progress").classList.remove("show");
+  document.getElementById("prog-bar").style.width = "0%";
+  document.getElementById("prog-bar").style.animation = "";
+}
 
 // ── Tools menu ───────────────────────────────────────────────────────────────
 function toggleToolsMenu() {
