@@ -302,6 +302,87 @@ def get_cotizacion_archivo(cid):
     return send_file(ruta, as_attachment=False)
 
 
+
+# ── Oportunidades / Pipeline ──────────────────────────────────────────────────
+@app.route("/api/oportunidades")
+def get_oportunidades():
+    filtros = {}
+    for k in ("etapa","empresa_id"):
+        v = request.args.get(k)
+        if v: filtros[k] = v
+    return ok(db.get_oportunidades(filtros))
+
+
+@app.route("/api/oportunidades", methods=["POST"])
+def post_oportunidad():
+    b = request.json or {}
+    eid = to_int(b.get("empresa_id"), 0)
+    titulo = clean(b.get("titulo"))
+    if not titulo: return err("El título es obligatorio")
+    if not db.obtener_empresa_por_id(eid):
+        return err("Empresa no encontrada", 404)
+    ok2 = db.crear_oportunidad(
+        eid, titulo,
+        descripcion          = clean(b.get("descripcion","")),
+        etapa                = clean(b.get("etapa","prospecto")),
+        monto_estimado       = to_float(b.get("monto_estimado"), None),
+        moneda               = clean(b.get("moneda","ARS")),
+        fecha_estimada_cierre= clean(b.get("fecha_estimada_cierre","")),
+        notas                = clean(b.get("notas","")),
+    )
+    if not ok2: return err("No se pudo crear")
+    row = db.fetchone(
+        "SELECT id FROM oportunidades WHERE empresa_id=? AND titulo=? "
+        "ORDER BY id DESC LIMIT 1", (eid, titulo))
+    return ok({"id": row["id"] if row else None}), 201
+
+
+@app.route("/api/oportunidades/<int:oid>")
+def get_oportunidad(oid):
+    row = db.get_oportunidad_por_id(oid)
+    if not row: return err("No encontrada", 404)
+    return ok(row)
+
+
+@app.route("/api/oportunidades/<int:oid>", methods=["PUT"])
+def put_oportunidad(oid):
+    b = request.json or {}
+    campos = {}
+    for k in ("titulo","descripcion","etapa","moneda",
+              "fecha_estimada_cierre","notas"):
+        if k in b: campos[k] = clean(b[k])
+    if "monto_estimado" in b:
+        campos["monto_estimado"] = to_float(b["monto_estimado"], None)
+    ok2 = db.editar_oportunidad(oid, **campos)
+    if not ok2: return err("No encontrada", 404)
+    return ok()
+
+
+@app.route("/api/oportunidades/<int:oid>", methods=["DELETE"])
+def delete_oportunidad(oid):
+    ok2 = db.eliminar_oportunidad(oid)
+    if not ok2: return err("No encontrada", 404)
+    return ok()
+
+
+@app.route("/api/oportunidades/<int:oid>/etapa", methods=["PUT"])
+def put_oportunidad_etapa(oid):
+    b = request.json or {}
+    etapa = clean(b.get("etapa",""))
+    if not db._normalizar_etapa(etapa):
+        return err("Etapa inválida", 400)
+    ok2 = db.cambiar_etapa_oportunidad(oid, etapa)
+    if not ok2: return err("No encontrada", 404)
+    return ok()
+
+
+@app.route("/api/empresas/<int:eid>/oportunidades")
+def get_oportunidades_empresa(eid):
+    if not db.obtener_empresa_por_id(eid):
+        return err("Empresa no encontrada", 404)
+    return ok(db.get_oportunidades_empresa(eid))
+
+
 # ── Actividades ───────────────────────────────────────────────────────────────
 _ACT_TIPOS = {"nota","llamada","email","reunion"}
 

@@ -151,6 +151,20 @@ class DBManager:
                         descripcion TEXT,
                         monto REAL,
                         FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE CASCADE)''',
+                    '''CREATE TABLE IF NOT EXISTS oportunidades (
+                        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                        empresa_id            INTEGER NOT NULL,
+                        titulo                TEXT    NOT NULL,
+                        descripcion           TEXT,
+                        etapa                 TEXT    NOT NULL DEFAULT 'prospecto',
+                        monto_estimado        REAL,
+                        moneda                TEXT    DEFAULT 'ARS',
+                        fecha_estimada_cierre TEXT,
+                        fecha_creacion        TEXT    NOT NULL,
+                        fecha_ultimo_cambio   TEXT    NOT NULL,
+                        notas                 TEXT,
+                        FOREIGN KEY (empresa_id) REFERENCES empresas (id)
+                        ON DELETE CASCADE)''',
                     '''CREATE TABLE IF NOT EXISTS actividades (
                         id          INTEGER PRIMARY KEY AUTOINCREMENT,
                         empresa_id  INTEGER NOT NULL,
@@ -327,6 +341,9 @@ class DBManager:
                 indices = [
                     "CREATE INDEX IF NOT EXISTS idx_empresas_nombre ON empresas (nombre)",
                     "CREATE INDEX IF NOT EXISTS idx_contactos_empresa_id ON contactos (empresa_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_oportunidades_empresa_id ON oportunidades (empresa_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_oportunidades_etapa ON oportunidades (etapa)",
+                    "CREATE INDEX IF NOT EXISTS idx_oportunidades_fecha ON oportunidades (fecha_ultimo_cambio DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_actividades_empresa_fecha ON actividades (empresa_id, fecha DESC, id DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_actividades_fecha ON actividades (fecha DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_cambios_empresa_id ON cambios (empresa_id)",
@@ -924,6 +941,145 @@ class DBManager:
         }
         return data
 
+
+
+    # ── Oportunidades / Pipeline ──────────────────────────────────────────────
+
+    ETAPAS_VENTA    = {"prospecto","contactado","a_visitar","a_cotizar",
+                       "cotizado","en_negociacion","ganado","perdido","muerta"}
+    ETAPAS_POSVENTA = {"en_proceso","entregada","finalizada"}
+    ETAPAS_TODAS    = ETAPAS_VENTA | ETAPAS_POSVENTA
+
+    @staticmethod
+    def _normalizar_etapa(etapa: str):
+        e = str(etapa or "prospecto").strip().lower()
+        todas = DBManager.ETAPAS_VENTA | DBManager.ETAPAS_POSVENTA
+        return e if e in todas else None
+
+    @staticmethod
+    def _fase_de_etapa(etapa: str) -> str:
+        e = str(etapa or "").strip().lower()
+        if e in DBManager.ETAPAS_POSVENTA or e == "ganado":
+            return "posventa"
+        return "venta"
+
+    def _add_fase(self, row) -> dict:
+        if not row: return row
+        d = dict(row)
+        d["fase"] = self._fase_de_etapa(d.get("etapa",""))
+        return d
+
+    def crear_oportunidad(self, empresa_id: int, titulo: str,
+                          descripcion: str = "", etapa: str = "prospecto",
+                          monto_estimado=None, moneda: str = "ARS",
+                          fecha_estimada_cierre: str = None,
+                          notas: str = "") -> bool:
+        if not empresa_id or not titulo or not str(titulo).strip():
+            return False
+        etapa = self._normalizar_etapa(etapa)
+        if not etapa:
+            return False
+        with self._write_lock:
+            try:
+                with self._get_connection() as conn:
+                    if not conn.execute(
+                            "SELECT 1 FROM empresas WHERE id=?",
+                            (empresa_id,)).fetchone():
+                        return False
+                    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    conn.execute(
+                        "INSERT INTO oportunidades "
+                        "(empresa_id,titulo,descripcion,etapa,monto_estimado,"
+                        "moneda,fecha_estimada_cierre,fecha_creacion,"
+                        "fecha_ultimo_cambio,notas) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (empresa_id, str(titulo).strip(),
+                         str(descripcion or "").strip(), etapa,
+                         monto_estimado,
+                         str(moneda or "ARS").strip(),
+                         fecha_estimada_cierre or None,
+                         ahora, ahora,
+                         str(notas or "").strip()))
+                    conn.commit()
+                    return True
+            except Exception as e:
+                logging.error(f"crear_oportunidad: {e}")
+                return False
+
+    def get_oportunidades(self, filtros: dict = None) -> List[Dict]:
+        filtros = filtros or {}
+        where, params = ["1=1"], []
+        if filtros.get("empresa_id"):
+            where.append("o.empresa_id=?"); params.append(filtros["empresa_id"])
+        if filtros.get("etapa"):
+            where.append("o.etapa=?"); params.append(filtros["etapa"])
+        rows = self.fetchall(
+            f"SELECT o.*, e.nombre empresa_nombre "
+            f"FROM oportunidades o JOIN empresas e ON o.empresa_id=e.id "
+            f"WHERE {' AND '.join(where)} "
+            f"ORDER BY o.fecha_ultimo_cambio DESC",
+            tuple(params))
+        return [self._add_fase(r) for r in rows]
+
+    def get_oportunidades_empresa(self, empresa_id: int) -> List[Dict]:
+        rows = self.fetchall(
+            "SELECT o.*, e.nombre empresa_nombre "
+            "FROM oportunidades o JOIN empresas e ON o.empresa_id=e.id "
+            "WHERE o.empresa_id=? ORDER BY o.fecha_ultimo_cambio DESC",
+            (empresa_id,))
+        return [self._add_fase(r) for r in rows]
+
+    def get_oportunidad_por_id(self, oid: int) -> Optional[Dict]:
+        row = self.fetchone(
+            "SELECT o.*, e.nombre empresa_nombre "
+            "FROM oportunidades o JOIN empresas e ON o.empresa_id=e.id "
+            "WHERE o.id=?", (oid,))
+        return self._add_fase(row) if row else None
+
+    def editar_oportunidad(self, oid: int, **campos) -> bool:
+        if not oid: return False
+        allowed = {"titulo","descripcion","etapa","monto_estimado",
+                   "moneda","fecha_estimada_cierre","notas"}
+        sets, vals = [], []
+        for k, v in campos.items():
+            if k not in allowed: continue
+            if k == "etapa":
+                v = self._normalizar_etapa(v)
+                if not v: continue
+            sets.append(f"{k}=?"); vals.append(v)
+        if not sets: return False
+        sets.append("fecha_ultimo_cambio=?")
+        vals.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        vals.append(oid)
+        with self._write_lock:
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.execute(
+                        f"UPDATE oportunidades SET {','.join(sets)} WHERE id=?",
+                        tuple(vals))
+                    conn.commit()
+                    return cur.rowcount > 0
+            except Exception as e:
+                logging.error(f"editar_oportunidad: {e}")
+                return False
+
+    def cambiar_etapa_oportunidad(self, oid: int, nueva_etapa: str) -> bool:
+        etapa = self._normalizar_etapa(nueva_etapa)
+        if not etapa: return False
+        return self.editar_oportunidad(oid, etapa=etapa)
+
+    def eliminar_oportunidad(self, oid: int) -> bool:
+        if not oid: return False
+        with self._write_lock:
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.execute(
+                        "DELETE FROM oportunidades WHERE id=?", (oid,))
+                    conn.commit()
+                    return cur.rowcount > 0
+            except Exception as e:
+                logging.error(f"eliminar_oportunidad: {e}")
+                return False
 
     # ── Actividades / Notas ───────────────────────────────────────────────────
 

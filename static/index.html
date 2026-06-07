@@ -225,6 +225,36 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 
 /* Placeholder */
 
+/* Pipeline */
+#pipeline-page{display:none;flex-direction:column;gap:10px;
+               padding:8px;flex:1;overflow:auto;background:var(--bg)}
+#pipeline-page.active{display:flex}
+.pipeline-topbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pipeline-table-wrap{background:var(--panel);border-radius:6px;overflow:auto;flex:1}
+.pip-table{width:100%;border-collapse:collapse;font-size:12px}
+.pip-table th{background:var(--sidebar);color:#fff;padding:7px 10px;
+              text-align:left;cursor:pointer;user-select:none;
+              position:sticky;top:0;font-size:11px;font-weight:600}
+.pip-table th:hover{background:#1E293B}
+.pip-table td{padding:7px 10px;border-bottom:1px solid var(--border)}
+.pip-table tr:hover td{background:#EFF6FF;cursor:pointer}
+.pip-badge{display:inline-block;padding:2px 8px;border-radius:99px;
+           font-size:10px;font-weight:700;text-transform:uppercase}
+.etapa-prospecto{background:#F1F5F9;color:#475569}
+.etapa-contactado{background:#DBEAFE;color:#1D4ED8}
+.etapa-a_visitar{background:#EDE9FE;color:#6D28D9}
+.etapa-a_cotizar{background:#FEF3C7;color:#92400E}
+.etapa-cotizado{background:#FED7AA;color:#9A3412}
+.etapa-en_negociacion{background:#CFFAFE;color:#0E7490}
+.etapa-ganado{background:#DCFCE7;color:#15803D}
+.etapa-perdido,.etapa-muerta{background:#FEE2E2;color:#B91C1C}
+.etapa-en_proceso{background:#DBEAFE;color:#1D4ED8}
+.etapa-entregada{background:#CFFAFE;color:#0E7490}
+.etapa-finalizada{background:#DCFCE7;color:#15803D}
+.fase-posventa{background:#F0FDF4;color:#166534;
+               font-size:9px;padding:1px 6px;border-radius:99px;
+               font-weight:700;letter-spacing:.3px}
+
 /* Timeline actividades */
 .timeline{display:flex;flex-direction:column;gap:0}
 .tl-item{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}
@@ -285,6 +315,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
   <div class="nav-item" onclick="showVerificacion()">Verificar instalación</div>
   <div class="nav-sep">IA</div>
   <div class="nav-item" onclick="showEnriquecer()">Enriquecer nombres (Gemini/Grok)</div>
+  <div class="nav-sep" style="cursor:pointer" onclick="showPipeline()">▶ Pipeline</div>
   <div class="nav-sep">Actividad reciente</div>
   <div id="act-recientes">
     <div style="font-size:10px;color:var(--muted);padding:4px 8px">Cargando…</div>
@@ -335,6 +366,41 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
         </div>
       </div>
       <button class="btn btn-primary" onclick="showNewEmpresa()">+ Nueva empresa</button>
+    </div>
+  </div>
+
+  <!-- Pipeline page -->
+  <div id="pipeline-page">
+    <div class="pipeline-topbar">
+      <button class="btn btn-primary" onclick="showNuevaOportunidad()">+ Nueva oportunidad</button>
+      <div style="display:flex;gap:4px">
+        <button class="btn btn-ghost" id="pip-btn-todas" onclick="pipFiltrar('todas')" style="font-size:11px">Todas</button>
+        <button class="btn btn-ghost" id="pip-btn-venta" onclick="pipFiltrar('venta')" style="font-size:11px">Venta</button>
+        <button class="btn btn-ghost" id="pip-btn-posventa" onclick="pipFiltrar('posventa')" style="font-size:11px">Posventa</button>
+      </div>
+      <input id="pip-search" placeholder="Buscar empresa o título…"
+             oninput="renderPipeline()"
+             style="background:#1E293B;border:none;color:#fff;padding:5px 10px;
+                    border-radius:4px;width:200px;font-size:12px;outline:none">
+      <span id="pip-count" style="color:var(--muted);font-size:11px;margin-left:auto"></span>
+      <button class="btn btn-ghost" onclick="showMain()" style="font-size:11px">← Volver a empresas</button>
+    </div>
+    <div class="pipeline-table-wrap">
+      <table class="pip-table">
+        <thead><tr>
+          <th onclick="pipSort('empresa_nombre')">Empresa <span id="ps-empresa"></span></th>
+          <th onclick="pipSort('titulo')">Oportunidad <span id="ps-titulo"></span></th>
+          <th onclick="pipSort('etapa')">Etapa <span id="ps-etapa"></span></th>
+          <th onclick="pipSort('monto_estimado')">Monto est. <span id="ps-monto"></span></th>
+          <th onclick="pipSort('fecha_ultimo_cambio')">Último cambio <span id="ps-fecha"></span></th>
+          <th>Acciones</th>
+        </tr></thead>
+        <tbody id="pip-body">
+          <tr><td colspan="6" style="text-align:center;padding:20px">
+            <div class="spinner"></div>
+          </td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -831,6 +897,78 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('diagnostico-modal')">Cerrar</button>
       <button class="btn btn-primary" onclick="showDiagnostico()">Actualizar</button>
+    </div>
+  </div>
+
+  <!-- Nueva/Editar oportunidad -->
+  <div class="modal" id="modal-oportunidad" style="display:none">
+    <div class="modal-header">
+      <span id="modal-oport-title">Nueva Oportunidad</span>
+      <button class="modal-close" onclick="closeModal('modal-oportunidad')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field" style="grid-column:1/-1">
+          <label>Empresa *</label>
+          <select id="mo-empresa" style="border:1px solid var(--border);padding:5px 8px;
+                  border-radius:4px;font-size:12px;background:var(--bg)">
+            <option value="">— Seleccioná una empresa —</option>
+          </select>
+        </div>
+        <div class="field" style="grid-column:1/-1">
+          <label>Título *</label><input id="mo-titulo">
+        </div>
+        <div class="field" style="grid-column:1/-1">
+          <label>Descripción</label><input id="mo-descripcion">
+        </div>
+        <div class="field">
+          <label>Etapa</label>
+          <select id="mo-etapa" style="border:1px solid var(--border);padding:5px 8px;
+                  border-radius:4px;font-size:12px;background:var(--bg)">
+            <optgroup label="— Venta —">
+              <option value="prospecto">Prospecto</option>
+              <option value="contactado">Contactado</option>
+              <option value="a_visitar">A visitar</option>
+              <option value="a_cotizar">A cotizar</option>
+              <option value="cotizado">Cotizado</option>
+              <option value="en_negociacion">En negociación</option>
+              <option value="ganado">Ganado ✓</option>
+              <option value="perdido">Perdido</option>
+              <option value="muerta">Muerta</option>
+            </optgroup>
+            <optgroup label="— Posventa —">
+              <option value="en_proceso">En proceso</option>
+              <option value="entregada">Entregada</option>
+              <option value="finalizada">Finalizada ✓</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="field">
+          <label>Monto estimado ($)</label>
+          <input id="mo-monto" type="number" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label>Moneda</label>
+          <select id="mo-moneda" style="border:1px solid var(--border);padding:5px 8px;
+                  border-radius:4px;font-size:12px;background:var(--bg)">
+            <option value="ARS">ARS</option>
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Fecha estimada de cierre</label>
+          <input id="mo-fecha" type="date">
+        </div>
+        <div class="field" style="grid-column:1/-1">
+          <label>Notas</label>
+          <input id="mo-notas">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-oportunidad')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveOportunidad()">Guardar</button>
     </div>
   </div>
 
@@ -2305,6 +2443,202 @@ function hideProgress() {
   document.getElementById("import-progress").classList.remove("show");
   document.getElementById("prog-bar").style.width = "0%";
   document.getElementById("prog-bar").style.animation = "";
+}
+
+// ── Pipeline ──────────────────────────────────────────────────────────────────
+const PIP = {
+  rows: [], sortCol: 'fecha_ultimo_cambio', sortAsc: false,
+  fase: 'todas', editId: null
+};
+
+const ETAPA_LABELS = {
+  prospecto:'Prospecto', contactado:'Contactado', a_visitar:'A visitar',
+  a_cotizar:'A cotizar', cotizado:'Cotizado', en_negociacion:'En negociación',
+  ganado:'Ganado', perdido:'Perdido', muerta:'Muerta',
+  en_proceso:'En proceso', entregada:'Entregada', finalizada:'Finalizada'
+};
+
+async function showPipeline() {
+  document.getElementById("body").style.display          = "none";
+  document.getElementById("pipeline-page").classList.add("active");
+  await loadPipeline();
+}
+
+function showMain() {
+  document.getElementById("pipeline-page").classList.remove("active");
+  document.getElementById("body").style.display = "flex";
+}
+
+async function loadPipeline() {
+  const r = await GET("/api/oportunidades");
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  PIP.rows = r.data || [];
+  renderPipeline();
+}
+
+function pipFiltrar(fase) {
+  PIP.fase = fase;
+  ["todas","venta","posventa"].forEach(f => {
+    const btn = document.getElementById("pip-btn-" + f);
+    if (btn) btn.className = "btn " + (f === fase ? "btn-primary" : "btn-ghost");
+  });
+  renderPipeline();
+}
+
+function pipSort(col) {
+  if (PIP.sortCol === col) PIP.sortAsc = !PIP.sortAsc;
+  else { PIP.sortCol = col; PIP.sortAsc = true; }
+  ["empresa_nombre","titulo","etapa","monto_estimado","fecha_ultimo_cambio"].forEach(c => {
+    const el = document.getElementById("ps-" + c.replace("_nombre","").replace("ultimo_cambio","fecha").replace("estimado","monto").split("_")[0]);
+    // simpler: just use the raw id
+  });
+  renderPipeline();
+}
+
+function renderPipeline() {
+  const q = (document.getElementById("pip-search")||{value:""}).value.toLowerCase();
+  let rows = PIP.rows.filter(r => {
+    if (PIP.fase !== "todas" && r.fase !== PIP.fase) return false;
+    if (q && !r.empresa_nombre.toLowerCase().includes(q) &&
+             !r.titulo.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const col = PIP.sortCol;
+  rows.sort((a,b) => {
+    let va = a[col]||"", vb = b[col]||"";
+    if (col === "monto_estimado") { va = +va||0; vb = +vb||0; return PIP.sortAsc ? va-vb : vb-va; }
+    va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
+    return PIP.sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+
+  document.getElementById("pip-count").textContent = `${rows.length} oportunidad(es)`;
+
+  const ETAPAS_NEXT = {
+    prospecto:["contactado","a_visitar","perdido","muerta"],
+    contactado:["a_visitar","a_cotizar","perdido","muerta"],
+    a_visitar:["a_cotizar","cotizado","perdido","muerta"],
+    a_cotizar:["cotizado","perdido","muerta"],
+    cotizado:["en_negociacion","ganado","perdido","muerta"],
+    en_negociacion:["ganado","perdido","muerta"],
+    ganado:["en_proceso"],
+    en_proceso:["entregada"],
+    entregada:["finalizada"],
+    perdido:["prospecto"], muerta:["prospecto"], finalizada:[]
+  };
+
+  document.getElementById("pip-body").innerHTML = rows.length
+    ? rows.map(o => {
+        const etapa   = o.etapa || "prospecto";
+        const proximas = (ETAPAS_NEXT[etapa]||[]).slice(0,2);
+        const monto   = o.monto_estimado
+          ? parseFloat(o.monto_estimado).toLocaleString("es-AR",{minimumFractionDigits:0})
+          : "—";
+        const fecha   = (o.fecha_ultimo_cambio||"").slice(0,10);
+        const btns = proximas.map(e =>
+          `<button class="btn btn-ghost" style="font-size:10px;padding:2px 7px"
+           onclick="event.stopPropagation();moverOportunidad(${o.id},'${e}')">
+           → ${ETAPA_LABELS[e]||e}</button>`
+        ).join("");
+        return `<tr onclick="editarOportunidad(${o.id})">
+          <td><strong>${esc(o.empresa_nombre||"")}</strong></td>
+          <td>${esc(o.titulo||"")}<br>
+            <span style="font-size:10px;color:var(--muted)">${esc(o.descripcion||"")}</span></td>
+          <td>
+            <span class="pip-badge etapa-${esc(etapa)}">${ETAPA_LABELS[etapa]||etapa}</span>
+            ${o.fase==="posventa" ? '<span class="fase-posventa">POSVENTA</span>' : ""}
+          </td>
+          <td style="text-align:right;white-space:nowrap">${o.moneda||"ARS"} ${monto}</td>
+          <td style="color:var(--muted)">${fecha}</td>
+          <td style="display:flex;gap:4px;flex-wrap:wrap">${btns}
+            <button class="btn btn-danger" style="font-size:10px;padding:2px 7px"
+              onclick="event.stopPropagation();eliminarOportunidad(${o.id})">✕</button>
+          </td>
+        </tr>`;
+      }).join("")
+    : '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted)">Sin oportunidades</td></tr>';
+}
+
+async function moverOportunidad(oid, etapa) {
+  const r = await PUT(`/api/oportunidades/${oid}/etapa`, {etapa});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  await loadPipeline();
+  toast(`→ ${ETAPA_LABELS[etapa]||etapa}`);
+}
+
+async function eliminarOportunidad(oid) {
+  if (!confirm("¿Eliminar esta oportunidad?")) return;
+  const r = await DEL(`/api/oportunidades/${oid}`);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  await loadPipeline();
+  toast("Oportunidad eliminada");
+}
+
+async function showNuevaOportunidad(eid=null) {
+  PIP.editId = null;
+  document.getElementById("modal-oport-title").textContent = "Nueva Oportunidad";
+  // Populate empresa select
+  const sel = document.getElementById("mo-empresa");
+  sel.innerHTML = '<option value="">— Seleccioná una empresa —</option>' +
+    S.allEmpresas.map(e =>
+      `<option value="${e.id}" ${e.id===eid?"selected":""}>${esc(e.nombre)}</option>`
+    ).join("");
+  ["mo-titulo","mo-descripcion","mo-notas"].forEach(id =>
+    document.getElementById(id).value = "");
+  document.getElementById("mo-etapa").value  = "prospecto";
+  document.getElementById("mo-moneda").value = "ARS";
+  document.getElementById("mo-monto").value  = "";
+  document.getElementById("mo-fecha").value  = "";
+  openModal("modal-oportunidad");
+}
+
+async function editarOportunidad(oid) {
+  const r = await GET(`/api/oportunidades/${oid}`);
+  if (!r.ok) return;
+  const o = r.data;
+  PIP.editId = oid;
+  document.getElementById("modal-oport-title").textContent = "Editar Oportunidad";
+  const sel = document.getElementById("mo-empresa");
+  sel.innerHTML = '<option value="">— Seleccioná —</option>' +
+    S.allEmpresas.map(e =>
+      `<option value="${e.id}" ${e.id===o.empresa_id?"selected":""}>${esc(e.nombre)}</option>`
+    ).join("");
+  document.getElementById("mo-titulo").value       = o.titulo||"";
+  document.getElementById("mo-descripcion").value  = o.descripcion||"";
+  document.getElementById("mo-etapa").value         = o.etapa||"prospecto";
+  document.getElementById("mo-monto").value         = o.monto_estimado||"";
+  document.getElementById("mo-moneda").value        = o.moneda||"ARS";
+  document.getElementById("mo-fecha").value         = (o.fecha_estimada_cierre||"").slice(0,10);
+  document.getElementById("mo-notas").value         = o.notas||"";
+  openModal("modal-oportunidad");
+}
+
+async function saveOportunidad() {
+  const eid    = +document.getElementById("mo-empresa").value;
+  const titulo = document.getElementById("mo-titulo").value.trim();
+  if (!titulo) { toast("El título es obligatorio","err"); return; }
+
+  const body = {
+    empresa_id:            eid,
+    titulo,
+    descripcion:           document.getElementById("mo-descripcion").value.trim(),
+    etapa:                 document.getElementById("mo-etapa").value,
+    monto_estimado:        parseFloat(document.getElementById("mo-monto").value)||null,
+    moneda:                document.getElementById("mo-moneda").value,
+    fecha_estimada_cierre: document.getElementById("mo-fecha").value||null,
+    notas:                 document.getElementById("mo-notas").value.trim(),
+  };
+
+  let r;
+  if (PIP.editId) {
+    r = await PUT(`/api/oportunidades/${PIP.editId}`, body);
+  } else {
+    if (!eid) { toast("Seleccioná una empresa","err"); return; }
+    r = await POST("/api/oportunidades", body);
+  }
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  closeModal("modal-oportunidad");
+  await loadPipeline();
+  toast(PIP.editId ? "Oportunidad actualizada" : "Oportunidad creada");
 }
 
 // ── Tools menu ───────────────────────────────────────────────────────────────

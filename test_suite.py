@@ -4402,6 +4402,206 @@ class TestActividades(unittest.TestCase):
         self.assertNotIn('dias_cotizacion', fn,
             "applyFilters no debe mandar dias_cotizacion")
 
+
+
+# =====================================================================
+# 51. OPORTUNIDADES / PIPELINE — DB
+# =====================================================================
+class TestOportunidades(unittest.TestCase):
+    def setUp(self):
+        self.db = fresh_db()
+        self.eid = make_emp(self.db, "Pipeline SA")
+
+    def test_crear_oportunidad_basico(self):
+        ok = self.db.crear_oportunidad(self.eid, "Venta tolva",
+                                       descripcion="Necesidad detectada")
+        self.assertTrue(ok)
+        rows = self.db.get_oportunidades_empresa(self.eid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["titulo"], "Venta tolva")
+        self.assertEqual(rows[0]["fase"], "venta")
+
+    def test_empresa_inexistente_rechazada(self):
+        self.assertFalse(self.db.crear_oportunidad(99999, "No existe"))
+
+    def test_etapa_invalida_rechazada(self):
+        self.assertFalse(
+            self.db.crear_oportunidad(self.eid, "Mala", etapa="inventada"))
+
+    def test_todas_etapas_validas_aceptadas(self):
+        for etapa in ("prospecto","contactado","a_visitar","a_cotizar",
+                      "cotizado","en_negociacion","ganado","perdido","muerta",
+                      "en_proceso","entregada","finalizada"):
+            ok = self.db.crear_oportunidad(
+                self.eid, f"Test {etapa}", etapa=etapa)
+            self.assertTrue(ok, f"Etapa '{etapa}' rechazada incorrectamente")
+
+    def test_cambiar_etapa_valida(self):
+        self.db.crear_oportunidad(self.eid, "Seguimiento")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        self.assertTrue(self.db.cambiar_etapa_oportunidad(oid, "contactado"))
+        row = self.db.get_oportunidad_por_id(oid)
+        self.assertEqual(row["etapa"], "contactado")
+
+    def test_cambiar_etapa_ganado_activa_posventa(self):
+        self.db.crear_oportunidad(self.eid, "Ganable")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        self.assertTrue(self.db.cambiar_etapa_oportunidad(oid, "ganado"))
+        self.assertEqual(self.db.get_oportunidad_por_id(oid)["fase"], "posventa")
+        self.assertTrue(self.db.cambiar_etapa_oportunidad(oid, "en_proceso"))
+        row = self.db.get_oportunidad_por_id(oid)
+        self.assertEqual(row["etapa"], "en_proceso")
+        self.assertEqual(row["fase"], "posventa")
+
+    def test_fase_derivada_correctamente(self):
+        self.assertEqual(self.db._fase_de_etapa("prospecto"), "venta")
+        self.assertEqual(self.db._fase_de_etapa("ganado"),    "posventa")
+        self.assertEqual(self.db._fase_de_etapa("entregada"), "posventa")
+        self.assertEqual(self.db._fase_de_etapa("muerta"),    "venta")
+
+    def test_cascade_delete_con_empresa(self):
+        self.db.crear_oportunidad(self.eid, "Se borra")
+        self.db.eliminar_empresa(self.eid)
+        self.assertEqual(self.db.get_oportunidades_empresa(self.eid), [])
+        huerfanas = self.db.fetchall(
+            "SELECT * FROM oportunidades WHERE empresa_id=?", (self.eid,))
+        self.assertEqual(len(huerfanas), 0)
+
+    def test_multiples_oportunidades_misma_empresa(self):
+        self.db.crear_oportunidad(self.eid, "Uno")
+        self.db.crear_oportunidad(self.eid, "Dos")
+        self.db.crear_oportunidad(self.eid, "Tres")
+        rows = self.db.get_oportunidades_empresa(self.eid)
+        self.assertEqual(len(rows), 3)
+
+    def test_monto_none_permitido(self):
+        self.assertTrue(
+            self.db.crear_oportunidad(self.eid, "Sin monto",
+                                      monto_estimado=None))
+
+    def test_sql_injection_en_titulo_notas(self):
+        payload = "'; DROP TABLE oportunidades;--"
+        self.assertTrue(
+            self.db.crear_oportunidad(self.eid, payload, notas=payload))
+        self.assertIsNotNone(
+            self.db.fetchall("SELECT * FROM oportunidades"))
+
+    def test_editar_oportunidad(self):
+        self.db.crear_oportunidad(self.eid, "Original")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        ok = self.db.editar_oportunidad(
+            oid, titulo="Editado", monto_estimado=50000.0)
+        self.assertTrue(ok)
+        row = self.db.get_oportunidad_por_id(oid)
+        self.assertEqual(row["titulo"], "Editado")
+        self.assertAlmostEqual(float(row["monto_estimado"]), 50000.0)
+
+    def test_eliminar_oportunidad(self):
+        self.db.crear_oportunidad(self.eid, "Para borrar")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        self.assertTrue(self.db.eliminar_oportunidad(oid))
+        self.assertIsNone(self.db.get_oportunidad_por_id(oid))
+
+    def test_eliminar_inexistente_devuelve_false(self):
+        self.assertFalse(self.db.eliminar_oportunidad(99999))
+
+    def test_get_oportunidades_filtro_etapa(self):
+        self.db.crear_oportunidad(self.eid, "Prospecto", etapa="prospecto")
+        self.db.crear_oportunidad(self.eid, "Contactado", etapa="contactado")
+        rows = self.db.get_oportunidades({"etapa": "prospecto"})
+        self.assertTrue(all(r["etapa"] == "prospecto" for r in rows))
+
+    def test_empresa_nombre_en_resultado(self):
+        self.db.crear_oportunidad(self.eid, "Con nombre empresa")
+        rows = self.db.get_oportunidades_empresa(self.eid)
+        self.assertIn("empresa_nombre", rows[0])
+        self.assertEqual(rows[0]["empresa_nombre"], "Pipeline SA")
+
+
+# =====================================================================
+# 52. OPORTUNIDADES — HTTP
+# =====================================================================
+class TestOportunidadesHTTP(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, '/home/claude/v26')
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db = _db
+        self.db.agregar_empresa("OportHTTP SA","","","","","","")
+        r = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='OportHTTP SA'")
+        self.eid = r["id"]
+
+    def tearDown(self):
+        self.db.ejecutar(
+            "DELETE FROM oportunidades WHERE empresa_id=?", (self.eid,))
+        self.db.eliminar_empresa(self.eid)
+
+    def test_post_oportunidad_201(self):
+        r = self.client.post("/api/oportunidades",
+                             json={"empresa_id": self.eid,
+                                   "titulo": "HTTP Venta"})
+        self.assertEqual(r.status_code, 201)
+        self.assertTrue(r.get_json()["ok"])
+
+    def test_get_oportunidades_200(self):
+        self.db.crear_oportunidad(self.eid, "Listado HTTP")
+        r = self.client.get("/api/oportunidades")
+        self.assertEqual(r.status_code, 200)
+        self.assertGreaterEqual(len(r.get_json()["data"]), 1)
+
+    def test_get_oportunidades_empresa_200(self):
+        self.db.crear_oportunidad(self.eid, "Por empresa HTTP")
+        r = self.client.get(f"/api/empresas/{self.eid}/oportunidades")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()["data"]
+        self.assertTrue(any(o["titulo"] == "Por empresa HTTP" for o in data))
+
+    def test_put_etapa_valida_200(self):
+        self.db.crear_oportunidad(self.eid, "Mover HTTP")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        r = self.client.put(f"/api/oportunidades/{oid}/etapa",
+                            json={"etapa": "contactado"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            self.db.get_oportunidad_por_id(oid)["etapa"], "contactado")
+
+    def test_put_etapa_invalida_400(self):
+        self.db.crear_oportunidad(self.eid, "Mover mal HTTP")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        r = self.client.put(f"/api/oportunidades/{oid}/etapa",
+                            json={"etapa": "inventada"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_delete_oportunidad_200(self):
+        self.db.crear_oportunidad(self.eid, "Borrar HTTP")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        r = self.client.delete(f"/api/oportunidades/{oid}")
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(self.db.get_oportunidad_por_id(oid))
+
+    def test_empresa_inexistente_404(self):
+        r = self.client.post("/api/oportunidades",
+                             json={"empresa_id": 999999, "titulo": "No"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_titulo_vacio_400(self):
+        r = self.client.post("/api/oportunidades",
+                             json={"empresa_id": self.eid, "titulo": ""})
+        self.assertEqual(r.status_code, 400)
+
+    def test_get_por_id_200(self):
+        self.db.crear_oportunidad(self.eid, "Por ID HTTP")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        r = self.client.get(f"/api/oportunidades/{oid}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["data"]["titulo"], "Por ID HTTP")
+
+    def test_get_por_id_inexistente_404(self):
+        r = self.client.get("/api/oportunidades/999999")
+        self.assertEqual(r.status_code, 404)
+
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
         import sys; sys.path.insert(0, '/home/claude/v26')
