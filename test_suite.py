@@ -4283,6 +4283,62 @@ class TestActividades(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(self.db.get_actividades_empresa(eid)), 100)
 
+    def test_empresa_inexistente_rechazada(self):
+        """agregar_actividad devuelve False si la empresa no existe."""
+        ok = self.db.agregar_actividad(99999, "nota", "Texto huérfano")
+        self.assertFalse(ok, "Debe rechazar empresa inexistente")
+        huerfanas = self.db.fetchall(
+            "SELECT * FROM actividades WHERE empresa_id=99999")
+        self.assertEqual(len(huerfanas), 0)
+
+    def test_eliminar_inexistente_devuelve_false(self):
+        """eliminar_actividad devuelve False si no existe la actividad."""
+        ok = self.db.eliminar_actividad(99999)
+        self.assertFalse(ok)
+
+    def test_editar_inexistente_devuelve_false(self):
+        ok = self.db.editar_actividad(99999, "nota", "Texto")
+        self.assertFalse(ok)
+
+    def test_tipo_invalido_normaliza_a_nota(self):
+        eid = make_emp(self.db)
+        self.assertTrue(self.db.agregar_actividad(eid, "hacker", "Texto"))
+        acts = self.db.get_actividades_empresa(eid)
+        self.assertEqual(acts[0]["tipo"], "nota",
+            "Tipo inválido debe normalizarse a 'nota'")
+
+    def test_todos_tipos_validos(self):
+        eid = make_emp(self.db)
+        for tipo in ("nota","llamada","email","reunion"):
+            self.assertTrue(
+                self.db.agregar_actividad(eid, tipo, f"Test {tipo}"))
+            acts = self.db.get_actividades_empresa(eid)
+            self.assertEqual(acts[0]["tipo"], tipo)
+
+    def test_filtro_dias_actividad(self):
+        """Empresas sin actividad reciente aparecen en el filtro."""
+        e_activa   = make_emp(self.db, "Activa SA")
+        e_inactiva = make_emp(self.db, "Inactiva SA")
+        self.db.agregar_actividad(e_activa, "nota", "Actividad hoy")
+        result = self.db.get_filtered_empresas("", {"dias_actividad": 30})
+        ids = {r["id"] for r in result}
+        self.assertIn(e_inactiva, ids,
+            "Empresa sin actividad debe aparecer en filtro")
+        self.assertNotIn(e_activa, ids,
+            "Empresa con actividad reciente NO debe aparecer")
+
+    def test_paginacion_actividades(self):
+        eid = make_emp(self.db)
+        for i in range(50):
+            self.db.agregar_actividad(eid, "nota", f"Nota {i}")
+        pag1 = self.db.get_actividades_empresa(eid, limit=10, offset=0)
+        pag2 = self.db.get_actividades_empresa(eid, limit=10, offset=10)
+        self.assertEqual(len(pag1), 10)
+        self.assertEqual(len(pag2), 10)
+        ids_p1 = {a["id"] for a in pag1}
+        ids_p2 = {a["id"] for a in pag2}
+        self.assertEqual(len(ids_p1 & ids_p2), 0, "Páginas no deben solaparse")
+
 
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
@@ -4338,6 +4394,33 @@ class TestActividadesHTTP(unittest.TestCase):
         data = r.get_json()["data"]
         self.assertGreater(len(data), 0)
         self.assertIn("empresa_nombre", data[0])
+
+    def test_get_empresa_inexistente_404(self):
+        r = self.client.get("/api/empresas/999999/actividades")
+        self.assertEqual(r.status_code, 404)
+
+    def test_post_empresa_inexistente_404(self):
+        r = self.client.post("/api/empresas/999999/actividades",
+                             json={"tipo":"nota","texto":"Huérfana"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_delete_actividad_inexistente_404(self):
+        r = self.client.delete("/api/actividades/999999")
+        self.assertEqual(r.status_code, 404)
+
+    def test_put_actividad_inexistente_404(self):
+        r = self.client.put("/api/actividades/999999",
+                            json={"tipo":"nota","texto":"X"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_tipo_invalido_normaliza_en_api(self):
+        r = self.client.post(
+            f"/api/empresas/{self.eid}/actividades",
+            json={"tipo":"inyeccion_sql","texto":"Test"})
+        self.assertEqual(r.status_code, 201)
+        acts = self.client.get(
+            f"/api/empresas/{self.eid}/actividades").get_json()["data"]
+        self.assertEqual(acts[0]["tipo"], "nota")
 
 
 # RUNNER

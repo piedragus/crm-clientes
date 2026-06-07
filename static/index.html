@@ -733,7 +733,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <option value="con">Solo con contactos</option>
           <option value="sin">Solo sin contactos</option>
         </select></div>
-      <div class="field"><label>Sin actividad en más de (días, 0=ignorar)</label>
+      <div class="field"><label>Sin actividad reciente en más de (días, 0=ignorar)</label>
         <input id="fl-dias" type="number" value="0" min="0"></div>
     </div>
     <div id="filtros-guardados-bar" style="padding:8px 16px 0;display:flex;gap:6px;flex-wrap:wrap"></div>
@@ -904,8 +904,7 @@ async function selectEmpresa(id) {
   S.selEmpresa = r.data;
   S.selContacto = null; S.selCotizacion = null;
   renderEmpresaDetail();
-  await Promise.all([loadContactos(), loadCotizaciones()]);
-  S.actividades = [];
+  await Promise.all([loadContactos(), loadCotizaciones(), loadActividades()]);
   enableDetailBtns(true);
   renderList(); // re-render to show selection
 }
@@ -1287,93 +1286,106 @@ const TIPO_ICONS = {llamada:"📞", email:"✉️", reunion:"🤝", nota:"📝"}
 const TIPO_CSS   = {llamada:"tl-llamada", email:"tl-email",
                     reunion:"tl-reunion", nota:"tl-nota"};
 
+function iconActividad(tipo) {
+  return TIPO_ICONS[tipo] || "📝";
+}
+
 async function loadActividades() {
-  if (!S.selEmpresa) return;
+  const box = document.getElementById("act-timeline");
+  if (!S.selEmpresa) {
+    S.actividades = [];
+    box.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);font-size:12px">Seleccioná una empresa</div>';
+    return;
+  }
   const r = await GET(`/api/empresas/${S.selEmpresa.id}/actividades`);
-  if (!r.ok) return;
-  S.actividades = r.data;
+  if (!r.ok) { toast(r.error||"Error cargando actividades","err"); return; }
+  S.actividades = r.data || [];
   renderActividades();
 }
 
 function renderActividades() {
+  const box   = document.getElementById("act-timeline");
   const items = S.actividades || [];
-  document.getElementById("act-timeline").innerHTML = items.length
-    ? items.map((a,i) => {
-        const tipo  = a.tipo || "nota";
-        const icon  = TIPO_ICONS[tipo] || "📝";
-        const css   = TIPO_CSS[tipo]   || "tl-nota";
-        const fecha = (a.fecha||"").slice(0,16).replace("T"," ");
-        return `<div class="tl-item" id="tl-${a.id}">
-          <div class="tl-icon ${css}">${icon}</div>
-          <div class="tl-body">
-            <div class="tl-meta">
-              <span class="tl-tipo">${tipo}</span>
-              <span>${esc(fecha)}</span>
-              ${a.usuario && a.usuario!=="usuario" ? `<span>${esc(a.usuario)}</span>` : ""}
-              <div class="tl-actions">
-                <button class="btn btn-ghost" style="padding:1px 6px;font-size:10px"
-                  onclick="editarActividad(${a.id})">✏</button>
-                <button class="btn btn-danger" style="padding:1px 6px;font-size:10px"
-                  onclick="eliminarActividad(${a.id})">✕</button>
-              </div>
-            </div>
-            <div class="tl-texto" id="tl-txt-${a.id}">${esc(a.texto||"")}</div>
+  if (!items.length) {
+    box.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted);font-size:12px">Sin actividad registrada</div>';
+    return;
+  }
+  box.innerHTML = items.map(a => {
+    const tipo  = a.tipo || "nota";
+    const css   = TIPO_CSS[tipo] || "tl-nota";
+    const fecha = (a.fecha||"").slice(0,16).replace("T"," ");
+    return `<div class="tl-item" id="tl-${a.id}">
+      <div class="tl-icon ${css}">${iconActividad(tipo)}</div>
+      <div class="tl-body">
+        <div class="tl-meta">
+          <span class="tl-tipo">${esc(tipo)}</span>
+          <span>${esc(fecha)}</span>
+          ${a.usuario && a.usuario !== "usuario" ? `<span>${esc(a.usuario)}</span>` : ""}
+          <div class="tl-actions">
+            <button class="btn btn-ghost" style="padding:1px 6px;font-size:10px"
+              onclick="editarActividad(${a.id})">✏</button>
+            <button class="btn btn-danger" style="padding:1px 6px;font-size:10px"
+              onclick="eliminarActividad(${a.id})">✕</button>
           </div>
-        </div>`;
-      }).join("")
-    : '<div style="text-align:center;padding:30px;color:var(--muted);font-size:12px">Sin actividad registrada</div>';
+        </div>
+        <div class="tl-texto">${esc(a.texto||"")}</div>
+      </div>
+    </div>`;
+  }).join("");
 }
 
 async function agregarActividad() {
   if (!S.selEmpresa) return;
-  const texto = document.getElementById("act-texto").value.trim();
-  if (!texto) return;
-  const tipo = document.getElementById("act-tipo").value;
+  const textoEl = document.getElementById("act-texto");
+  const texto   = textoEl.value.trim();
+  if (!texto) { toast("Escribí una actividad","err"); return; }
+  const tipo = document.getElementById("act-tipo").value || "nota";
   const r = await POST(`/api/empresas/${S.selEmpresa.id}/actividades`,
-                       {tipo, texto});
+                       {tipo, texto, usuario:"usuario"});
   if (!r.ok) { toast(r.error||"Error","err"); return; }
-  document.getElementById("act-texto").value = "";
-  await loadActividades();
-  await loadActividadesRecientes();
-  toast("Actividad registrada");
+  textoEl.value = "";
+  await Promise.all([loadActividades(), loadActividadesRecientes()]);
+  toast("Actividad guardada");
 }
 
 async function editarActividad(aid) {
-  const el = document.getElementById(`tl-txt-${aid}`);
-  if (!el) return;
   const act = (S.actividades||[]).find(a => a.id === aid);
   if (!act) return;
-  const nuevo = prompt("Editar:", act.texto);
-  if (!nuevo || nuevo === act.texto) return;
+  const texto = prompt("Editar actividad:", act.texto||"");
+  if (texto === null) return;
+  const limpio = texto.trim();
+  if (!limpio) { toast("El texto es obligatorio","err"); return; }
   const r = await PUT(`/api/actividades/${aid}`,
-                      {tipo: act.tipo, texto: nuevo});
+                      {tipo: act.tipo||"nota", texto: limpio});
   if (!r.ok) { toast(r.error||"Error","err"); return; }
-  await loadActividades();
+  await Promise.all([loadActividades(), loadActividadesRecientes()]);
+  toast("Actividad actualizada");
 }
 
 async function eliminarActividad(aid) {
   if (!confirm("¿Eliminar esta actividad?")) return;
   const r = await DEL(`/api/actividades/${aid}`);
-  if (!r.ok) { toast(r.error||"Error","err"); return; }
-  await loadActividades();
+  if (!r.ok) { toast(r.error||"No encontrada","err"); return; }
+  await Promise.all([loadActividades(), loadActividadesRecientes()]);
+  toast("Actividad eliminada");
 }
 
 async function loadActividadesRecientes() {
-  const r = await GET("/api/actividades/recientes?dias=7&limit=20");
-  if (!r.ok) return;
-  const items = r.data;
-  document.getElementById("act-recientes").innerHTML = items.length
-    ? items.map(a => {
-        const icon = TIPO_ICONS[a.tipo||"nota"] || "📝";
-        const fecha = (a.fecha||"").slice(5,16);
-        return `<div class="act-rec-item"
-                     onclick="selectEmpresa(${a.empresa_id});switchTab('actividad')"
-                     title="${esc(a.texto||"")}">
-          <span class="act-rec-empresa">${esc(a.empresa_nombre||"")}</span>
-          ${icon} <span style="color:var(--muted)">${fecha}</span>
-          — ${esc((a.texto||"").slice(0,40))}${(a.texto||"").length>40?"…":""}
-        </div>`;
-      }).join("")
+  const box = document.getElementById("act-recientes");
+  const r   = await GET("/api/actividades/recientes?dias=30&limit=30");
+  if (!r.ok) {
+    box.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:4px 8px">Sin actividad</div>';
+    return;
+  }
+  const rows = r.data || [];
+  box.innerHTML = rows.length
+    ? rows.map(a => `
+        <div class="act-rec-item"
+             onclick="selectEmpresa(${a.empresa_id});switchTab('actividad')"
+             title="${esc(a.texto||"")}">
+          <div class="act-rec-empresa">${esc(a.empresa_nombre||"")}</div>
+          <div>${iconActividad(a.tipo)} ${esc((a.texto||"").slice(0,60))}</div>
+        </div>`).join("")
     : '<div style="font-size:10px;color:var(--muted);padding:4px 8px">Sin actividad reciente</div>';
 }
 
@@ -1803,7 +1815,7 @@ function applyFilters() {
   if (tag)   f.tag   = tag;
   if (cot)   f.cotizaciones_cond = cot;
   if (con)   f.contactos_cond    = con;
-  if (dias)  f.dias_cotizacion   = dias;
+  if (dias)  f.dias_actividad    = dias;
   S.filters = f;
   const n = Object.keys(f).length;
   document.getElementById("filter-badge").textContent = n ? `● ${n}` : "";
