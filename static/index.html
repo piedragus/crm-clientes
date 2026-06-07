@@ -1506,12 +1506,10 @@ async function doSearch() {
     const mmax = document.getElementById("sq-mmax").value;
     const tipo = document.getElementById("sq-tipo").value;
     const per  = document.getElementById("sq-per").value;
-    const tipo = document.getElementById("sq-tipo").value;
     if (mmin) params.set("monto_min", mmin);
     if (mmax) params.set("monto_max", mmax);
     if (tipo) params.set("tipo", tipo);
     if (per)  params.set("periodo", per);
-    if (tipo) params.set("tipo", tipo);
     const r = await GET("/api/buscar?" + params);
     if (!r.ok) return;
     S.srchRows = r.data; S.srchSel = null;
