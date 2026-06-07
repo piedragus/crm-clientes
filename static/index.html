@@ -698,7 +698,16 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <tbody id="scan-body"></tbody>
         </table>
       </div>
-      <div id="scan-info" style="font-size:11px;color:var(--muted)"></div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span id="scan-info" style="font-size:11px;color:var(--muted)"></span>
+        <span id="scan-pages" style="font-size:11px;color:var(--muted);margin-left:auto"></span>
+        <button class="btn btn-ghost" id="scan-prev"
+                onclick="escanearPagina(-1)" disabled
+                style="padding:3px 10px;font-size:11px">◀ Anterior</button>
+        <button class="btn btn-ghost" id="scan-next"
+                onclick="escanearPagina(1)" disabled
+                style="padding:3px 10px;font-size:11px">Siguiente ▶</button>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ok" id="btn-imp-auto" onclick="importarAuto()" disabled>✓ Importar automáticos</button>
@@ -1697,28 +1706,65 @@ function showImportGoogle() { showImportCSV(); } // same endpoint
 // ── Importar carpeta ──────────────────────────────────────────────────────────
 function showImportCarpeta() { openModal("importer-modal"); }
 
+// Scan state
+const SCAN = { offset: 0, limit: 200, total: 0, thresh: 60 };
+
 async function escanear() {
-  const path   = document.getElementById("imp-path").value.trim();
+  SCAN.offset = 0;
+  SCAN.thresh = parseInt(document.getElementById("imp-thresh").value)||60;
+  await _doEscanear();
+}
+
+async function escanearPagina(dir) {
+  SCAN.offset = Math.max(0, SCAN.offset + dir * SCAN.limit);
+  await _doEscanear();
+}
+
+async function _doEscanear() {
+  const path = document.getElementById("imp-path").value.trim();
   if (!path) { toast("Ingresá una ruta","err"); return; }
+
   const scanBtn = document.querySelector("#importer-modal .btn-primary");
   if (scanBtn) { scanBtn.disabled = true; scanBtn.textContent = "Escaneando…"; }
-  showProgress("Escaneando carpeta…", path);
+  document.getElementById("scan-prev").disabled = true;
+  document.getElementById("scan-next").disabled = true;
+
+  const page = Math.floor(SCAN.offset / SCAN.limit) + 1;
+  showProgress(
+    `Escaneando carpeta… (página ${page})`,
+    `Procesando ${SCAN.limit} archivos a la vez`
+  );
+
   let r;
   try {
-    r = await POST("/api/escanear", {path});
+    r = await POST("/api/escanear", {
+      path,
+      offset: SCAN.offset,
+      limit:  SCAN.limit,
+      thresh: SCAN.thresh,
+    });
   } finally {
     hideProgress();
     if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = "Escanear"; }
   }
   if (!r.ok) { toast(r.error||"Error","err"); return; }
-  S.scanRows = r.data;
-  const thresh = parseInt(document.getElementById("imp-thresh").value)||90;
+
+  SCAN.total   = r.total || 0;
+  S.scanRows   = r.data  || [];
+  const pages  = r.pages || 1;
+  const curPg  = Math.floor(SCAN.offset / SCAN.limit) + 1;
+
   document.getElementById("scan-info").textContent =
-    `${r.total} archivo(s) encontrado(s)`;
+    `${SCAN.total.toLocaleString()} archivo(s) nuevos encontrados`;
+  document.getElementById("scan-pages").textContent =
+    pages > 1 ? `Página ${curPg} / ${pages}` : "";
   document.getElementById("scan-table-wrap").style.display = "";
   document.getElementById("btn-imp-auto").disabled = false;
   document.getElementById("btn-imp-sel").disabled  = false;
-  renderScanTable(thresh);
+  document.getElementById("scan-prev").disabled = SCAN.offset === 0;
+  document.getElementById("scan-next").disabled = !r.has_more;
+
+  renderScanTable(SCAN.thresh);
 }
 
 function renderScanTable(thresh) {
