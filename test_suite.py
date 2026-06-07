@@ -4347,7 +4347,6 @@ class TestActividades(unittest.TestCase):
         /api/empresas?dias_actividad=30 devuelve solo empresas sin actividad
         en los últimos 30 días.
         """
-        import sys; sys.path.insert(0, '/home/claude/v26')
         from server import app as _app, db as _db
         _app.config['TESTING'] = True
         client = _app.test_client()
@@ -4377,7 +4376,8 @@ class TestActividades(unittest.TestCase):
     def test_ui_habilita_boton_actividad(self):
         """enableDetailBtns debe incluir btn-add-act."""
         import re
-        html = open('/home/claude/v26/static/index.html').read()
+        with open(os.path.join(BASE_DIR, 'static', 'index.html'), encoding='utf-8') as _f:
+            html = _f.read()
         self.assertIn('"btn-add-act"', html,
             "btn-add-act debe existir en el HTML")
         block = re.search(
@@ -4388,7 +4388,8 @@ class TestActividades(unittest.TestCase):
 
     def test_ui_filtro_manda_dias_actividad(self):
         """applyFilters debe enviar dias_actividad, no dias_cotizacion."""
-        html = open('/home/claude/v26/static/index.html').read()
+        with open(os.path.join(BASE_DIR, 'static', 'index.html'), encoding='utf-8') as _f:
+            html = _f.read()
         import re
         # Check días field sends dias_actividad not dias_cotizacion
         import re as _re
@@ -4500,7 +4501,6 @@ class TestOportunidades(unittest.TestCase):
 
     def test_filtro_fase_venta_endpoint(self):
         """GET /api/oportunidades?fase=venta solo devuelve fase venta."""
-        import sys; sys.path.insert(0, '/home/claude/v26')
         from server import app as _app, db as _db
         _app.config['TESTING'] = True
         client = _app.test_client()
@@ -4515,7 +4515,6 @@ class TestOportunidades(unittest.TestCase):
 
     def test_filtro_fase_posventa_endpoint(self):
         """GET /api/oportunidades?fase=posventa solo devuelve fase posventa."""
-        import sys; sys.path.insert(0, '/home/claude/v26')
         from server import app as _app, db as _db
         _app.config['TESTING'] = True
         client = _app.test_client()
@@ -4528,7 +4527,8 @@ class TestOportunidades(unittest.TestCase):
 
     def test_ui_selector_empresa_deshabilitado_en_edicion(self):
         """editarOportunidad() debe deshabilitar el selector de empresa."""
-        html = open('/home/claude/v26/static/index.html').read()
+        with open(os.path.join(BASE_DIR, 'static', 'index.html'), encoding='utf-8') as _f:
+            html = _f.read()
         self.assertIn('sel.disabled = true', html,
             "El selector de empresa debe deshabilitarse en modo edición")
         self.assertIn('sel.disabled = false', html,
@@ -4571,7 +4571,6 @@ class TestOportunidades(unittest.TestCase):
 # =====================================================================
 class TestOportunidadesHTTP(unittest.TestCase):
     def setUp(self):
-        import sys; sys.path.insert(0, '/home/claude/v26')
         from server import app as _app, db as _db
         _app.config['TESTING'] = True
         self.client = _app.test_client()
@@ -4652,7 +4651,6 @@ class TestOportunidadesHTTP(unittest.TestCase):
 
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
-        import sys; sys.path.insert(0, '/home/claude/v26')
         from server import app, db as _db
         app.config['TESTING'] = True
         self.client = app.test_client()
