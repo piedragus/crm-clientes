@@ -24,7 +24,8 @@ Grupos:
 
 import sys, os, sqlite3, unittest, threading, time, random, string, json
 import tempfile, shutil, csv
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
 
 from db_manager import DBManager
 from utils import formatear_fecha, CSVCleaner
@@ -4648,6 +4649,148 @@ class TestOportunidadesHTTP(unittest.TestCase):
     def test_get_por_id_inexistente_404(self):
         r = self.client.get("/api/oportunidades/999999")
         self.assertEqual(r.status_code, 404)
+
+
+
+# =====================================================================
+# 53. ESCANEAR / IMPORTAR CARPETA — PERFORMANCE
+# =====================================================================
+class TestEscanearPerformance(unittest.TestCase):
+    """
+    Verifica que /api/escanear NO calcula hash por defecto y
+    que /api/importar/carpeta reutiliza el hash del escaneo.
+    """
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client  = _app.test_client()
+        self.db      = _db
+        self.tmpdir  = tempfile.mkdtemp()
+        # Create test files
+        self.pdf1 = os.path.join(self.tmpdir, "ACME001.pdf")
+        self.pdf2 = os.path.join(self.tmpdir, "BETA001.pdf")
+        for p in (self.pdf1, self.pdf2):
+            with open(p, 'wb') as f_:
+                f_.write(b'%PDF-1.4 fake content ' + os.path.basename(p).encode())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_escanear_no_hash_por_default(self):
+        """file_sha256 NO debe llamarse durante escaneo sin hash:true."""
+        import server as srv
+        call_count = [0]
+        original = srv.file_sha256
+        def mock_sha256(path):
+            call_count[0] += 1
+            return original(path)
+        srv.file_sha256 = mock_sha256
+        try:
+            r = self.client.post("/api/escanear",
+                                 json={"path": self.tmpdir})
+            self.assertEqual(r.status_code, 200)
+            data = r.get_json()
+            self.assertTrue(data["ok"])
+            self.assertEqual(call_count[0], 0,
+                f"file_sha256 fue llamado {call_count[0]} veces sin hash:true")
+            # archivo_hash debe ser None en cada resultado
+            for row in data["data"]:
+                self.assertIsNone(row.get("archivo_hash"),
+                    "archivo_hash debe ser None sin hash:true")
+        finally:
+            srv.file_sha256 = original
+
+    def test_escanear_hash_opcional(self):
+        """Con hash:true sí calcula hashes."""
+        import server as srv
+        call_count = [0]
+        original = srv.file_sha256
+        def mock_sha256(path):
+            call_count[0] += 1
+            return original(path)
+        srv.file_sha256 = mock_sha256
+        try:
+            r = self.client.post("/api/escanear",
+                                 json={"path": self.tmpdir, "hash": True})
+            self.assertEqual(r.status_code, 200)
+            self.assertGreater(call_count[0], 0,
+                "file_sha256 debe llamarse con hash:true")
+        finally:
+            srv.file_sha256 = original
+
+    def test_escanear_respeta_limit(self):
+        """Con limit=1, devuelve máximo 1 resultado aunque haya más archivos."""
+        r = self.client.post("/api/escanear",
+                             json={"path": self.tmpdir, "limit": 1})
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertLessEqual(len(data["data"]), 1)
+        self.assertEqual(data["total"], 2)   # 2 pdfs creados
+        self.assertTrue(data["has_more"])
+
+    def test_escanear_paginacion_offset(self):
+        """offset=1, limit=1 devuelve el segundo archivo."""
+        r0 = self.client.post("/api/escanear",
+                              json={"path": self.tmpdir, "limit": 1, "offset": 0})
+        r1 = self.client.post("/api/escanear",
+                              json={"path": self.tmpdir, "limit": 1, "offset": 1})
+        paths0 = {x["file_path"] for x in r0.get_json()["data"]}
+        paths1 = {x["file_path"] for x in r1.get_json()["data"]}
+        self.assertEqual(len(paths0 & paths1), 0,
+            "Las páginas no deben solaparse")
+
+    def test_importar_reutiliza_archivo_hash_si_viene(self):
+        """Si item trae archivo_hash, NO recalcula."""
+        import server as srv
+        call_count = [0]
+        original = srv.file_sha256
+        def mock_sha256(path):
+            call_count[0] += 1
+            return original(path)
+        srv.file_sha256 = mock_sha256
+        self.db.agregar_empresa("HashTest SA","","","","","","")
+        eid = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='HashTest SA'")["id"]
+        try:
+            r = self.client.post("/api/importar/carpeta", json={"items": [{
+                "empresa_id": eid,
+                "file_path":  self.pdf1,
+                "file_name":  "ACME001.pdf",
+                "archivo_hash": "aabbccdd1234567890",  # pre-calculated
+            }]})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(call_count[0], 0,
+                f"file_sha256 no debe llamarse si hash ya viene: llamado {call_count[0]}x")
+        finally:
+            srv.file_sha256 = original
+            self.db.eliminar_empresa(eid)
+
+    def test_importar_calcula_hash_si_no_viene(self):
+        """Si item NO trae archivo_hash, sí lo calcula."""
+        import server as srv
+        call_count = [0]
+        original = srv.file_sha256
+        def mock_sha256(path):
+            call_count[0] += 1
+            return original(path)
+        srv.file_sha256 = mock_sha256
+        self.db.agregar_empresa("HashCalc SA","","","","","","")
+        eid = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='HashCalc SA'")["id"]
+        try:
+            r = self.client.post("/api/importar/carpeta", json={"items": [{
+                "empresa_id": eid,
+                "file_path":  self.pdf2,
+                "file_name":  "BETA001.pdf",
+                # no archivo_hash
+            }]})
+            self.assertEqual(r.status_code, 200)
+            self.assertGreater(call_count[0], 0,
+                "file_sha256 debe calcularse si no viene en el item")
+        finally:
+            srv.file_sha256 = original
+            self.db.eliminar_empresa(eid)
 
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):

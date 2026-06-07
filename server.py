@@ -643,10 +643,16 @@ def importar_carpeta():
         fname = clean(item.get("file_name"))
         if not eid or not fpath: err_count += 1; continue
         if fpath in existing_rutas: skip_count += 1; continue
-        try:
-            ahash = file_sha256(fpath)
-        except Exception:
-            ahash = None
+        # Reuse hash from scan if provided — never recalculate unnecessarily
+        ahash = clean(item.get("archivo_hash")) or None
+        if ahash and ahash in existing_hashes:
+            skip_count += 1; continue
+        # Only compute hash if not provided by scan
+        if not ahash:
+            try:
+                ahash = file_sha256(fpath)
+            except Exception:
+                ahash = None
         if ahash and ahash in existing_hashes: skip_count += 1; continue
         try:
             mtime = datetime.fromtimestamp(
@@ -671,58 +677,109 @@ def importar_carpeta():
 # ── Escanear carpeta ──────────────────────────────────────────────────────────
 @app.route("/api/escanear", methods=["POST"])
 def escanear_carpeta():
-    b    = request.json or {}
-    path = clean(b.get("path"))
+    """
+    Escanea carpeta con paginación. NO calcula hash por defecto (muy lento).
+    Deduplicación por ruta_archivo (O(1)). Hash opcional con {hash:true}.
+    Soporta offset/limit — solo hace fuzzy matching sobre la página actual.
+    """
+    b      = request.json or {}
+    path   = clean(b.get("path"))
     if not path or not os.path.isdir(path):
         return err(f"Carpeta no encontrada: {path!r}")
+
+    offset     = max(0, to_int(b.get("offset", 0),  0))
+    limit      = max(1, min(to_int(b.get("limit", 200), 200), 500))
+    calc_hash  = bool(b.get("hash", False))  # OFF by default
+    thresh     = max(0, min(to_int(b.get("thresh", 60), 60), 100))
+
     EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
+
     try:
-        from fuzzywuzzy import process as fz_process
+        from thefuzz import process as fz_process
     except ImportError:
         from difflib import SequenceMatcher
         class fz_process:
             @staticmethod
             def extract(q, choices, limit=1):
-                s = [(c, int(SequenceMatcher(None,str(q or "").lower(),
-                      str(c or "").lower()).ratio()*100)) for c in choices]
+                s = [(ch, int(SequenceMatcher(None, str(q or "").lower(),
+                      str(ch or "").lower()).ratio()*100)) for ch in choices]
                 return sorted(s, key=lambda x:-x[1])[:limit]
 
     empresas     = db.fetchall("SELECT id, nombre FROM empresas ORDER BY nombre")
     comp_names   = [e["nombre"] for e in empresas]
     comp_by_name = {e["nombre"]: e["id"] for e in empresas}
-    existing     = {r["ruta_archivo"] for r in
-                    db.fetchall("SELECT ruta_archivo FROM cotizaciones")
-                    if r.get("ruta_archivo")}
-    existing_hashes = {r["archivo_hash"] for r in
-                       db.fetchall("SELECT archivo_hash FROM cotizaciones")
-                       if r.get("archivo_hash")}
-    found = []
+
+    # Dedup by ruta only — fast, no disk reads
+    existing_rutas = {r["ruta_archivo"] for r in
+                      db.fetchall("SELECT ruta_archivo FROM cotizaciones")
+                      if r.get("ruta_archivo")}
+
+    # Only load existing hashes if caller requested hash dedup
+    existing_hashes = set()
+    if calc_hash:
+        existing_hashes = {r["archivo_hash"] for r in
+                           db.fetchall("SELECT archivo_hash FROM cotizaciones")
+                           if r.get("archivo_hash")}
+
+    # Phase 1: walk and collect matching paths (no fuzzy, no hash — just metadata)
+    # Stop early once we have enough for offset+limit to avoid walking 10k files
+    # when user is on page 1
+    all_paths   = []
+    total_found = 0
+
     for root, _, files in os.walk(path):
         for fname in files:
-            ext = os.path.splitext(fname)[1].lower()
-            if ext not in EXTS: continue
+            if os.path.splitext(fname)[1].lower() not in EXTS:
+                continue
             fpath = os.path.join(root, fname)
-            if fpath in existing: continue
+            if fpath in existing_rutas:
+                continue
+            total_found += 1
+            all_paths.append((fpath, fname))
+
+    # Phase 2: apply pagination BEFORE fuzzy matching
+    page_paths = all_paths[offset: offset + limit]
+
+    # Phase 3: fuzzy match + optional hash — only for current page
+    results = []
+    for fpath, fname in page_paths:
+        rel     = os.path.relpath(fpath, path)
+        carpeta = rel.split(os.sep)[0] if os.sep in rel else ""
+        src     = carpeta or os.path.splitext(fname)[0]
+
+        sugerida, sim, eid = "", 0, None
+        if comp_names:
+            hits = fz_process.extract(src, comp_names, limit=1)
+            if hits:
+                sugerida, sim = hits[0][0], hits[0][1]
+                eid = comp_by_name.get(sugerida) if sim >= thresh else None
+
+        # Hash only if explicitly requested
+        ahash = None
+        if calc_hash:
             try:
                 ahash = file_sha256(fpath)
-                if ahash in existing_hashes: continue
+                if ahash in existing_hashes:
+                    continue  # skip duplicate by hash
             except Exception:
                 ahash = None
-            rel      = os.path.relpath(fpath, path)
-            carpeta  = rel.split(os.sep)[0] if os.sep in rel else ""
-            src      = carpeta or os.path.splitext(fname)[0]
-            sugerida, sim, eid = "", 0, None
-            if comp_names:
-                hits = fz_process.extract(src, comp_names, limit=1)
-                if hits:
-                    sugerida, sim = hits[0][0], hits[0][1]
-                    eid = comp_by_name.get(sugerida)
-            found.append({
-                "file_path": fpath, "file_name": fname,
-                "carpeta": carpeta, "sugerida": sugerida,
-                "sim": sim, "eid": eid, "archivo_hash": ahash,
-            })
-    return ok(found, total=len(found))
+
+        results.append({
+            "file_path":    fpath,
+            "file_name":    fname,
+            "carpeta":      carpeta,
+            "sugerida":     sugerida,
+            "sim":          sim,
+            "eid":          eid,
+            "archivo_hash": ahash,  # None unless hash:true
+        })
+
+    return ok(results,
+              total    = total_found,
+              offset   = offset,
+              limit    = limit,
+              has_more = (offset + limit) < total_found,
+              pages    = max(1, -(-total_found // limit)))
 
 # ── Exportar ──────────────────────────────────────────────────────────────────
 @app.route("/api/exportar")
