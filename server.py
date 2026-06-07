@@ -670,6 +670,248 @@ def exportar():
     return Response(data, mimetype=mime,
                     headers={"Content-Disposition": f"attachment; filename={fname}"})
 
+
+# ── Importador masivo inteligente ─────────────────────────────────────────────
+GENERIC_FOLDERS = {
+    'argentina','bolivia','chile','colombia','estados unidos','mexico',
+    'peru','uruguay','nicaragua','paraguay','ecuador','brasil',
+    'comercial','equipos','aspiradores','cabinas','pipe (tubos)',
+    'repuestos tolva','hojas membretadas especiales',
+    'pedidos presupuestos internacionales','datos de catalogo tolvas',
+    'tg 70','tg100','tg250','tg500',
+    'cartas','carta','cotizaciones','cotizacion','clientes','clientes x zona',
+    'planos','mantenimiento','nueva carpeta','mto','mto-2011','mto-2012',
+    'mto-2013','mto2011','a- representantes en el exterior',
+    '00 cotizaciones tipo de maq',
+    'enero 2011','febrero 2011','julio 2011','junio 2011','diciembre 2011',
+    'abril2011','noviembre-2011','agosto','mayo','2013',
+    '500p','800p','1000p','1000s','1200p','1200s','1500p','500s','600p','600s',
+    '6 ca','1 ca','1 cl','12 ca','147 m 20 hp','maquina nueva',
+    'aaa-con o sin competencia','aa cotizaciones e informes tipicas',
+}
+
+IMPORT_EXTS = {'.pdf','.docx','.xlsx','.doc','.xls','.pptx','.txt'}
+
+def _extract_client_from_stem(stem):
+    """'ALBANESI02' → 'ALBANESI', 'Alejandro Garaggiola01' → 'Alejandro Garaggiola'"""
+    import re
+    name = re.sub(r'[\s_-]*\d+\s*$', '', stem).strip()
+    return name if name else stem
+
+def _get_client_name(folder_chain, filename_stem):
+    """Walk folders deepest-first, skip generic ones; fallback to filename."""
+    for folder in reversed(folder_chain):
+        if folder.lower().strip() not in GENERIC_FOLDERS:
+            return folder
+    return _extract_client_from_stem(filename_stem)
+
+
+@app.route("/api/importar/masivo", methods=["POST"])
+def importar_masivo():
+    """
+    Importación masiva inteligente:
+    - Solo PDF (ignora ODT, imágenes, etc.)
+    - Detecta nombre de empresa desde carpeta o nombre de archivo
+    - Crea empresas automáticamente si no existen
+    - No reimporta archivos ya importados (por ruta)
+    - Devuelve resumen: empresas creadas, cotizaciones importadas
+    """
+    b    = request.json or {}
+    path = b.get("path","").strip()
+    if not path or not os.path.isdir(path):
+        return err(f"Carpeta no encontrada: {path!r}")
+
+    dry_run = bool(b.get("dry_run", False))
+
+    # Load existing rutas to skip duplicates
+    existing = {r["ruta_archivo"] for r in
+                db.fetchall("SELECT ruta_archivo FROM cotizaciones")
+                if r.get("ruta_archivo")}
+
+    # Load existing empresas for fuzzy matching
+    empresas_existentes = db.fetchall("SELECT id, nombre FROM empresas")
+    emp_by_nombre = {e["nombre"].lower(): e["id"] for e in empresas_existentes}
+
+    from datetime import datetime as _dt
+    import re
+
+    stats = {
+        "empresas_creadas": 0,
+        "cotizaciones_importadas": 0,
+        "ya_existian": 0,
+        "errores": 0,
+        "empresas_nuevas": [],
+    }
+
+    # Walk the folder tree
+    for root, dirs, files in os.walk(path):
+        # Build folder chain relative to base path
+        rel = os.path.relpath(root, path)
+        if rel == '.':
+            folder_chain = []
+        else:
+            folder_chain = rel.replace('\\', '/').replace('\\', '/').split('/')
+
+        for fname in files:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext != '.pdf':  # Only PDF
+                continue
+
+            fpath = os.path.join(root, fname)
+
+            if fpath in existing:
+                stats["ya_existian"] += 1
+                continue
+
+            stem = os.path.splitext(fname)[0]
+            client_name = _get_client_name(folder_chain, stem)
+
+            if not client_name or len(client_name.strip()) < 2:
+                stats["errores"] += 1
+                continue
+
+            client_name = client_name.strip()
+
+            if dry_run:
+                stats["cotizaciones_importadas"] += 1
+                continue
+
+            # Find or create empresa
+            eid = emp_by_nombre.get(client_name.lower())
+            if not eid:
+                # Try case-insensitive match
+                for en, eid_try in emp_by_nombre.items():
+                    if en == client_name.lower():
+                        eid = eid_try
+                        break
+
+            if not eid:
+                # Create new empresa
+                ok2 = db.agregar_empresa(
+                    client_name, "", "", "", "", "", "")
+                if ok2:
+                    row = db.fetchone(
+                        "SELECT id FROM empresas WHERE nombre=?",
+                        (client_name,))
+                    if row:
+                        eid = row["id"]
+                        emp_by_nombre[client_name.lower()] = eid
+                        stats["empresas_creadas"] += 1
+                        stats["empresas_nuevas"].append(client_name)
+
+            if not eid:
+                stats["errores"] += 1
+                continue
+
+            # Get file date
+            try:
+                mtime = _dt.fromtimestamp(
+                    os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                mtime = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            ok2 = db.agregar_cotizacion_con_ruta(
+                eid, fname, 0.0, mtime, fpath)
+            if ok2:
+                stats["cotizaciones_importadas"] += 1
+                existing.add(fpath)
+
+                # Launch background resumen
+                def _bg(fp=fpath, ei=eid):
+                    try:
+                        import sqlite3 as _sq
+                        from extractor_texto import extraer
+                        from resumidor import resumir
+                        texto = extraer(fp)
+                        data  = resumir(texto)
+                        conn  = _sq.connect(cfg.get_db_name(), timeout=10)
+                        conn.execute("PRAGMA busy_timeout=5000")
+                        cols = [r[1] for r in
+                                conn.execute("PRAGMA table_info(cotizaciones)")]
+                        sets, vals = [], []
+                        if "resumen"      in cols:
+                            sets.append("resumen=?")
+                            vals.append(data.get("resumen",""))
+                        if "proveedor_ia" in cols:
+                            sets.append("proveedor_ia=?")
+                            vals.append(data.get("proveedor_ia","none"))
+                        if "monto" in cols and data.get("monto",0) and                                 float(data.get("monto",0)) > 0:
+                            sets.append("monto=?")
+                            vals.append(float(data["monto"]))
+                        if sets:
+                            vals += [ei, fp]
+                            conn.execute(
+                                f"UPDATE cotizaciones SET {','.join(sets)} "
+                                f"WHERE empresa_id=? AND ruta_archivo=?", vals)
+                            conn.commit()
+                        conn.close()
+                    except Exception as exc:
+                        logging.error(f"bg resumen masivo: {exc}")
+                threading.Thread(target=_bg, daemon=True).start()
+            else:
+                stats["errores"] += 1
+
+    return ok(stats)
+
+
+@app.route("/api/importar/masivo/preview", methods=["POST"])
+def importar_masivo_preview():
+    """
+    Preview sin importar: devuelve cuántas empresas y cotizaciones
+    se crearían, con una muestra de los primeros 50 archivos.
+    """
+    b    = request.json or {}
+    path = b.get("path","").strip()
+    if not path or not os.path.isdir(path):
+        return err(f"Carpeta no encontrada: {path!r}")
+
+    existing = {r["ruta_archivo"] for r in
+                db.fetchall("SELECT ruta_archivo FROM cotizaciones")
+                if r.get("ruta_archivo")}
+    empresas_existentes = {e["nombre"].lower() for e in
+                           db.fetchall("SELECT nombre FROM empresas")}
+
+    import re
+    clients_new = set()
+    clients_existing = set()
+    total_pdf = 0
+    ya_importados = 0
+    sample = []
+
+    for root, dirs, files in os.walk(path):
+        rel = os.path.relpath(root, path)
+        folder_chain = [] if rel == '.' else rel.replace('\\', '/').split('/')
+
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() != '.pdf':
+                continue
+            total_pdf += 1
+            fpath = os.path.join(root, fname)
+            if fpath in existing:
+                ya_importados += 1
+                continue
+            stem  = os.path.splitext(fname)[0]
+            client = _get_client_name(folder_chain, stem).strip()
+            if client.lower() in empresas_existentes:
+                clients_existing.add(client)
+            else:
+                clients_new.add(client)
+            if len(sample) < 50:
+                sample.append({
+                    "file": fname,
+                    "client": client,
+                    "is_new": client.lower() not in empresas_existentes,
+                })
+
+    return ok({
+        "total_pdf":         total_pdf,
+        "ya_importados":     ya_importados,
+        "a_importar":        total_pdf - ya_importados,
+        "empresas_nuevas":   len(clients_new),
+        "empresas_existentes": len(clients_existing),
+        "sample":            sample,
+    })
+
 # ── Backup ────────────────────────────────────────────────────────────────────
 @app.route("/api/backup", methods=["POST"])
 def backup():

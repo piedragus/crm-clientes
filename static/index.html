@@ -314,7 +314,8 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
              min-width:220px;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.12);overflow:hidden">
           <div class="tools-section">IMPORTAR</div>
           <div class="tools-item" onclick="closeToolsMenu();showImportCSV()">📧 CSV de mails / contactos</div>
-          <div class="tools-item" onclick="closeToolsMenu();showImportCarpeta()">📁 Carpeta de cotizaciones</div>
+          <div class="tools-item" onclick="closeToolsMenu();showImportMasivo()">🚀 Importación masiva (miles de archivos)</div>
+          <div class="tools-item" onclick="closeToolsMenu();showImportCarpeta()">📁 Carpeta de cotizaciones (manual)</div>
           <div class="tools-sep"></div>
           <div class="tools-section">EXPORTAR</div>
           <div class="tools-item" onclick="closeToolsMenu();doExport('xlsx')">📊 Exportar Excel</div>
@@ -713,6 +714,69 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
       <button class="btn btn-ok" id="btn-imp-auto" onclick="importarAuto()" disabled>✓ Importar automáticos</button>
       <button class="btn btn-primary" id="btn-imp-sel" onclick="importarSeleccionados()" disabled>Importar seleccionados</button>
       <button class="btn btn-ghost" onclick="closeModal('importer-modal')">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- Importación masiva -->
+  <div class="modal" id="bulk-import-modal" style="display:none;width:640px;max-width:96vw">
+    <div class="modal-header">
+      <span>🚀 Importación masiva inteligente</span>
+      <button class="modal-close" onclick="closeModal('bulk-import-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Ruta de la carpeta raíz</label>
+        <input id="bulk-path"
+               placeholder="C:\Users\aroca\ROCA AGUSTIN FEDERICO\Comercialización - Documentos"
+               style="font-size:11px">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" onclick="previewMasivo()" id="btn-bulk-preview">
+          🔍 Ver qué se importaría
+        </button>
+        <button class="btn btn-primary" onclick="importarMasivo()" id="btn-bulk-import" disabled>
+          🚀 Importar todo
+        </button>
+      </div>
+      <!-- Preview results -->
+      <div id="bulk-preview" style="display:none;background:var(--bg);
+           padding:12px;border-radius:6px;border:1px solid var(--border)">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+          <div class="stat-card" style="background:var(--panel)">
+            <div class="lbl">PDFs encontrados</div>
+            <div class="val" id="bp-total" style="font-size:18px">—</div>
+          </div>
+          <div class="stat-card" style="background:var(--panel)">
+            <div class="lbl">A importar</div>
+            <div class="val" id="bp-new" style="font-size:18px;color:var(--ok)">—</div>
+          </div>
+          <div class="stat-card" style="background:var(--panel)">
+            <div class="lbl">Empresas nuevas</div>
+            <div class="val" id="bp-emp-new" style="font-size:18px;color:var(--warn)">—</div>
+          </div>
+          <div class="stat-card" style="background:var(--panel)">
+            <div class="lbl">Ya importados</div>
+            <div class="val" id="bp-exist" style="font-size:18px;color:var(--muted)">—</div>
+          </div>
+        </div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);
+                    text-transform:uppercase;margin-bottom:6px">
+          Muestra (primeros 50 archivos)
+        </div>
+        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);
+                    border-radius:4px">
+          <table class="sub-table" style="width:100%;font-size:11px">
+            <thead><tr>
+              <th>Archivo</th><th>Empresa detectada</th><th>Estado</th>
+            </tr></thead>
+            <tbody id="bulk-sample"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="bulk-status" style="font-size:12px;color:var(--muted)"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('bulk-import-modal')">Cerrar</button>
     </div>
   </div>
 
@@ -1702,6 +1766,104 @@ function showImportCSV() {
 }
 
 function showImportGoogle() { showImportCSV(); } // same endpoint
+
+// ── Importación masiva ────────────────────────────────────────────────────────
+function showImportMasivo() {
+  document.getElementById("bulk-preview").style.display = "none";
+  document.getElementById("bulk-status").textContent = "";
+  document.getElementById("btn-bulk-import").disabled = true;
+  openModal("bulk-import-modal");
+}
+
+async function previewMasivo() {
+  const path = document.getElementById("bulk-path").value.trim();
+  if (!path) { toast("Ingresá la ruta","err"); return; }
+
+  const btn = document.getElementById("btn-bulk-preview");
+  btn.disabled = true; btn.textContent = "Analizando…";
+  showProgress("Analizando carpeta…", "Esto puede tardar un minuto");
+
+  try {
+    const r = await POST("/api/importar/masivo/preview", {path});
+    hideProgress();
+    btn.disabled = false; btn.textContent = "🔍 Ver qué se importaría";
+
+    if (!r.ok) { toast(r.error||"Error","err"); return; }
+    const d = r.data;
+
+    document.getElementById("bp-total").textContent   = d.total_pdf.toLocaleString();
+    document.getElementById("bp-new").textContent     = d.a_importar.toLocaleString();
+    document.getElementById("bp-emp-new").textContent = d.empresas_nuevas.toLocaleString();
+    document.getElementById("bp-exist").textContent   = d.ya_importados.toLocaleString();
+
+    document.getElementById("bulk-sample").innerHTML = (d.sample||[]).map(s =>
+      `<tr>
+        <td>${esc(s.file)}</td>
+        <td>${esc(s.client)}</td>
+        <td style="color:${s.is_new ? 'var(--warn)' : 'var(--ok)'}">
+          ${s.is_new ? '✦ Nueva empresa' : '✓ Existe'}
+        </td>
+      </tr>`
+    ).join("");
+
+    document.getElementById("bulk-preview").style.display = "";
+    document.getElementById("btn-bulk-import").disabled = d.a_importar === 0;
+    document.getElementById("bulk-status").textContent =
+      d.a_importar === 0 ? "Todo ya estaba importado." : "";
+
+  } catch(e) {
+    hideProgress();
+    btn.disabled = false; btn.textContent = "🔍 Ver qué se importaría";
+    toast("Error al analizar","err");
+  }
+}
+
+async function importarMasivo() {
+  const path = document.getElementById("bulk-path").value.trim();
+  if (!path) return;
+
+  if (!confirm("¿Importar todos los PDFs encontrados?\nSe crearán las empresas que no existan."))
+    return;
+
+  const btn = document.getElementById("btn-bulk-import");
+  btn.disabled = true;
+  document.getElementById("bulk-status").textContent = "Importando…";
+
+  let fake = 5;
+  showProgress("Importando archivos…", "Esto puede tardar varios minutos");
+  const ticker = setInterval(() => {
+    fake = Math.min(fake + 1, 90);
+    updateProgress(fake);
+  }, 3000);
+
+  try {
+    const r = await POST("/api/importar/masivo", {path});
+    clearInterval(ticker);
+    hideProgress();
+    btn.disabled = false;
+
+    if (!r.ok) { toast(r.error||"Error","err"); return; }
+    const d = r.data;
+
+    document.getElementById("bulk-status").innerHTML =
+      `<strong style="color:var(--ok)">✓ Importación completada</strong><br>
+       📄 Cotizaciones importadas: <strong>${d.cotizaciones_importadas}</strong><br>
+       🏢 Empresas creadas: <strong>${d.empresas_creadas}</strong><br>
+       ⏭ Ya existían: <strong>${d.ya_existian}</strong><br>
+       ${d.errores ? `⚠ Errores: ${d.errores}` : ""}`;
+
+    toast(`✓ ${d.cotizaciones_importadas} cotizaciones importadas, ${d.empresas_creadas} empresas creadas`);
+    await Promise.all([loadEmpresas(), loadStats()]);
+
+  } catch(e) {
+    clearInterval(ticker);
+    hideProgress();
+    btn.disabled = false;
+    document.getElementById("bulk-status").textContent = "Error durante la importación.";
+    toast("Error al importar","err");
+  }
+}
+
 
 // ── Importar carpeta ──────────────────────────────────────────────────────────
 function showImportCarpeta() { openModal("importer-modal"); }
