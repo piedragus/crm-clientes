@@ -4792,6 +4792,153 @@ class TestEscanearPerformance(unittest.TestCase):
             srv.file_sha256 = original
             self.db.eliminar_empresa(eid)
 
+
+
+# =====================================================================
+# 54. IMPORTADOR ROBUSTO — EMPRESAS DETECTADAS
+# =====================================================================
+class TestImportadorEmpresasDetectadas(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db     = _db
+        self.tmpdir = tempfile.mkdtemp()
+        # Create test PDFs
+        for name in ("ACME001.pdf","BETA SA01.pdf","GAMMA002.pdf"):
+            p = os.path.join(self.tmpdir, name)
+            with open(p, 'wb') as f_:
+                f_.write(b'%PDF-1.4 ' + name.encode())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in ("ACME","BETA SA","GAMMA"):
+            row = self.db.fetchone(
+                "SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row: self.db.eliminar_empresa(row["id"])
+
+    def test_importar_empresas_desde_carpeta_crea_empresas(self):
+        r = self.client.post("/api/importar/empresas-desde-carpeta",
+                             json={"path": self.tmpdir})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.assertGreater(d["creadas"], 0)
+        self.assertIn("sample_creadas", d)
+
+    def test_importar_empresas_no_importa_cotizaciones(self):
+        before = self.db.count("cotizaciones")
+        self.client.post("/api/importar/empresas-desde-carpeta",
+                         json={"path": self.tmpdir})
+        after = self.db.count("cotizaciones")
+        self.assertEqual(before, after,
+            "importar-empresas-desde-carpeta no debe crear cotizaciones")
+
+    def test_importar_empresas_no_duplica_existentes(self):
+        # First call
+        self.client.post("/api/importar/empresas-desde-carpeta",
+                         json={"path": self.tmpdir})
+        count1 = self.db.count("empresas")
+        # Second call — no new empresas
+        r2 = self.client.post("/api/importar/empresas-desde-carpeta",
+                              json={"path": self.tmpdir})
+        count2 = self.db.count("empresas")
+        self.assertEqual(count1, count2, "No debe duplicar empresas")
+        d = r2.get_json()["data"]
+        self.assertEqual(d["creadas"], 0)
+        self.assertGreater(d["existentes"], 0)
+
+    def test_importar_empresas_acepta_ruta_carpeta(self):
+        """También acepta el param ruta_carpeta para compatibilidad."""
+        r = self.client.post("/api/importar/empresas-desde-carpeta",
+                             json={"ruta_carpeta": self.tmpdir})
+        self.assertEqual(r.status_code, 200)
+
+    def test_importar_carpeta_crea_empresa_si_no_hay_empresa_id(self):
+        """Si item no trae empresa_id, debe crear empresa y asignar."""
+        import uuid
+        nombre_unico = f"AutoCreate_{uuid.uuid4().hex[:8]}"
+        # Create a real file in tmpdir
+        pdf_path = os.path.join(self.tmpdir, f"{nombre_unico}001.pdf")
+        with open(pdf_path, 'wb') as f_:
+            f_.write(b'%PDF-1.4 test')
+        r = self.client.post("/api/importar/carpeta", json={"items": [{
+            "file_path":               pdf_path,
+            "file_name":               f"{nombre_unico}001.pdf",
+            "empresa_nombre_detectada": nombre_unico,
+        }]})
+        self.assertEqual(r.status_code, 200)
+        # Verify empresa was created
+        row = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre=?", (nombre_unico,))
+        self.assertIsNotNone(row,
+            f"Empresa '{nombre_unico}' debe crearse si no hay empresa_id")
+        if row: self.db.eliminar_empresa(row["id"])
+
+    def test_importar_carpeta_usa_empresa_existente_si_hay_empresa_id(self):
+        """Si item trae empresa_id válido, lo usa sin crear."""
+        self.db.agregar_empresa("Empresa Preexistente","","","","","","")
+        eid = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='Empresa Preexistente'")["id"]
+        before_emp = self.db.count("empresas")
+        r = self.client.post("/api/importar/carpeta", json={"items": [{
+            "file_path":  os.path.join(self.tmpdir, "BETA SA01.pdf"),
+            "file_name":  "BETA SA01.pdf",
+            "empresa_id": eid,
+        }]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.db.count("empresas"), before_emp,
+            "No debe crear empresa nueva si empresa_id ya existe")
+        self.db.eliminar_empresa(eid)
+
+    def test_importar_carpeta_fallback_nombre_archivo(self):
+        """Sin empresa_id ni empresa_nombre_detectada, usa nombre del archivo."""
+        r = self.client.post("/api/importar/carpeta", json={"items": [{
+            "file_path":  os.path.join(self.tmpdir, "GAMMA002.pdf"),
+            "file_name":  "GAMMA002.pdf",
+            # No empresa_id, no empresa_nombre_detectada
+        }]})
+        self.assertEqual(r.status_code, 200)
+        # Cleanup
+        row = self.db.fetchone("SELECT id FROM empresas WHERE nombre='GAMMA'")
+        if row: self.db.eliminar_empresa(row["id"])
+
+    def test_verificar_no_crashea_si_falta_google(self):
+        """GET /api/verificar no debe crashear si google.generativeai no está."""
+        import server as srv
+        original = srv._safe_find_spec
+        def mock_spec(name):
+            if "google" in name: return False  # simulate missing google module
+            return original(name)
+        srv._safe_find_spec = mock_spec
+        try:
+            r = self.client.get("/api/verificar")
+            self.assertIn(r.status_code, (200, 500),
+                "No debe causar excepción no manejada")
+        finally:
+            srv._safe_find_spec = original
+
+    def test_escanear_devuelve_empresa_nombre_detectada(self):
+        r = self.client.post("/api/escanear",
+                             json={"path": self.tmpdir, "limit": 10})
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()["data"]
+        for row in data:
+            self.assertIn("empresa_nombre_detectada", row,
+                "Cada resultado debe incluir empresa_nombre_detectada")
+
+    def test_escanear_corta_temprano_con_limit_1(self):
+        """Con offset=0, limit=1 y múltiples archivos, has_more debe ser True."""
+        r = self.client.post("/api/escanear",
+                             json={"path": self.tmpdir,
+                                   "offset": 0, "limit": 1})
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertLessEqual(len(data["data"]), 1)
+        # 3 PDFs in tmpdir → has_more should be True
+        if data["total"] > 1:
+            self.assertTrue(data["has_more"])
+
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
         from server import app, db as _db

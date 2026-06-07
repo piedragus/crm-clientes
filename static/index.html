@@ -754,6 +754,10 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <input id="imp-thresh" type="number" value="90" min="50" max="100" style="width:70px">
         </div>
         <button class="btn btn-primary" onclick="escanear()">Escanear</button>
+        <button class="btn btn-warn" onclick="crearEmpresasDetectadas()"
+                id="btn-crear-empresas" title="Crear empresas desde la carpeta antes de escanear">
+          🏢 Crear empresas detectadas
+        </button>
       </div>
       <div id="scan-table-wrap" style="display:none">
         <table class="sub-table" style="width:100%">
@@ -765,6 +769,9 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <tbody id="scan-body"></tbody>
         </table>
       </div>
+      <div id="empresas-creadas-result" style="display:none;background:var(--bg);
+           padding:8px 12px;border-radius:4px;border:1px solid var(--border);
+           font-size:11px;color:var(--txt2)"></div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span id="scan-info" style="font-size:11px;color:var(--muted)"></span>
         <span id="scan-pages" style="font-size:11px;color:var(--muted);margin-left:auto"></span>
@@ -2008,6 +2015,39 @@ function showImportCarpeta() { openModal("importer-modal"); }
 
 // Scan state
 const SCAN = { offset: 0, limit: 200, total: 0, thresh: 60 };
+
+async function crearEmpresasDetectadas() {
+  const path = document.getElementById("imp-path").value.trim();
+  if (!path) { toast("Ingresá la ruta de la carpeta primero","err"); return; }
+  const btn = document.getElementById("btn-crear-empresas");
+  btn.disabled = true; btn.textContent = "Creando…";
+  showProgress("Detectando empresas en la carpeta…", path);
+  try {
+    const r = await POST("/api/importar/empresas-desde-carpeta", {path});
+    hideProgress();
+    btn.disabled = false; btn.textContent = "🏢 Crear empresas detectadas";
+    if (!r.ok) { toast(r.error||"Error","err"); return; }
+    const d = r.data;
+    const resDiv = document.getElementById("empresas-creadas-result");
+    resDiv.style.display = "";
+    resDiv.innerHTML =
+      `<strong style="color:var(--ok)">✓ Listo.</strong>
+       Detectadas: <strong>${d.detectadas}</strong> |
+       Creadas: <strong style="color:var(--warn)">${d.creadas}</strong> |
+       Ya existían: <strong>${d.existentes}</strong>
+       ${d.errores ? ` | Errores: ${d.errores}` : ""}
+       ${d.sample_creadas?.length
+         ? `<br><span style="color:var(--muted)">Nuevas: ${d.sample_creadas.slice(0,8).join(", ")}${d.sample_creadas.length>8?"…":""}</span>`
+         : ""}
+       <br><em style="color:var(--muted)">Ahora hacé clic en Escanear para ver las cotizaciones.</em>`;
+    toast(`✓ ${d.creadas} empresa(s) creadas`);
+    await Promise.all([loadEmpresas(), loadStats()]);
+  } catch(e) {
+    hideProgress();
+    btn.disabled = false; btn.textContent = "🏢 Crear empresas detectadas";
+    toast("Error","err");
+  }
+}
 
 async function escanear() {
   SCAN.offset = 0;

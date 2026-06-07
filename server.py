@@ -84,6 +84,14 @@ def to_float(v, default=None):
         return float(v)
     except: return default
 
+def _safe_find_spec(module_name: str) -> bool:
+    """importlib.util.find_spec can raise ModuleNotFoundError for submodules."""
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ModuleNotFoundError, ValueError):
+        return False
+
+
 def file_sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -636,13 +644,42 @@ def importar_carpeta():
                        if r.get("archivo_hash")}
     crear_backup_seguro("antes_importar_carpeta")
 
-    ok_count = skip_count = err_count = 0
+    # Cache empresa names for auto-create
+    emp_by_nombre   = {e["nombre"].lower(): e["id"]
+                       for e in db.fetchall("SELECT id, nombre FROM empresas")}
+    ok_count = skip_count = err_count = empresas_creadas = 0
+
     for item in items:
-        eid   = to_int(item.get("empresa_id"), 0, lo=1)
+        eid   = to_int(item.get("empresa_id"), 0)  # 0 = not provided, triggers auto-create
         fpath = clean(item.get("file_path"))
         fname = clean(item.get("file_name"))
-        if not eid or not fpath: err_count += 1; continue
+        if not fpath: err_count += 1; continue
         if fpath in existing_rutas: skip_count += 1; continue
+
+        # Auto-create empresa if no empresa_id provided
+        if not eid:
+            # Try name sources in order of reliability
+            for src in (
+                clean(item.get("empresa_nombre_detectada")),
+                clean(item.get("sugerida")),
+                clean(item.get("carpeta")),
+                os.path.splitext(fname)[0] if fname else None,
+            ):
+                if src and len(src.strip()) >= 2:
+                    nombre = src.strip()
+                    eid = emp_by_nombre.get(nombre.lower())
+                    if not eid:
+                        db.agregar_empresa(nombre, "", "", "", "", "", "")
+                        row = db.fetchone(
+                            "SELECT id FROM empresas WHERE nombre=?", (nombre,))
+                        if row:
+                            eid = row["id"]
+                            emp_by_nombre[nombre.lower()] = eid
+                            empresas_creadas += 1
+                    break
+
+        if not eid: err_count += 1; continue
+
         # Reuse hash from scan if provided — never recalculate unnecessarily
         ahash = clean(item.get("archivo_hash")) or None
         if ahash and ahash in existing_hashes:
@@ -672,7 +709,7 @@ def importar_carpeta():
                 lanzar_resumen(row["id"])
         else:
             err_count += 1
-    return ok({"importados": ok_count, "omitidos": skip_count, "errores": err_count})
+    return ok({"importados": ok_count, "omitidos": skip_count, "errores": err_count, "empresas_creadas": empresas_creadas})
 
 # ── Escanear carpeta ──────────────────────────────────────────────────────────
 @app.route("/api/escanear", methods=["POST"])
@@ -721,31 +758,42 @@ def escanear_carpeta():
                            db.fetchall("SELECT archivo_hash FROM cotizaciones")
                            if r.get("archivo_hash")}
 
-    # Phase 1: walk and collect matching paths (no fuzzy, no hash — just metadata)
-    # Stop early once we have enough for offset+limit to avoid walking 10k files
-    # when user is on page 1
-    all_paths   = []
-    total_found = 0
+    # Phase 1: walk with early exit — collect offset+limit+1 items max
+    # The extra "+1" tells us has_more without walking the whole tree
+    need       = offset + limit + 1
+    all_paths  = []   # (fpath, fname, folder_chain)
+    total_approx = 0
 
     for root, _, files in os.walk(path):
+        rel_root    = os.path.relpath(root, path)
+        folder_chain = [] if rel_root == "." else rel_root.replace("\\", "/").split("/")
         for fname in files:
             if os.path.splitext(fname)[1].lower() not in EXTS:
                 continue
             fpath = os.path.join(root, fname)
             if fpath in existing_rutas:
                 continue
-            total_found += 1
-            all_paths.append((fpath, fname))
+            total_approx += 1
+            all_paths.append((fpath, fname, folder_chain))
+            # Early exit after collecting enough for pagination
+            # (only on first page — deeper pages need full walk for correct offset)
+            if offset == 0 and len(all_paths) >= need:
+                break
+        if offset == 0 and len(all_paths) >= need:
+            break
 
-    # Phase 2: apply pagination BEFORE fuzzy matching
+    has_more   = len(all_paths) > offset + limit
     page_paths = all_paths[offset: offset + limit]
 
     # Phase 3: fuzzy match + optional hash — only for current page
     results = []
-    for fpath, fname in page_paths:
+    for fpath, fname, folder_chain in page_paths:
         rel     = os.path.relpath(fpath, path)
         carpeta = rel.split(os.sep)[0] if os.sep in rel else ""
         src     = carpeta or os.path.splitext(fname)[0]
+        # Detect empresa name (same logic as importar_masivo)
+        empresa_nombre_detectada = _get_client_name(folder_chain,
+                                                     os.path.splitext(fname)[0])
 
         sugerida, sim, eid = "", 0, None
         if comp_names:
@@ -765,21 +813,82 @@ def escanear_carpeta():
                 ahash = None
 
         results.append({
-            "file_path":    fpath,
-            "file_name":    fname,
-            "carpeta":      carpeta,
-            "sugerida":     sugerida,
-            "sim":          sim,
-            "eid":          eid,
-            "archivo_hash": ahash,  # None unless hash:true
+            "file_path":               fpath,
+            "file_name":               fname,
+            "carpeta":                 carpeta,
+            "sugerida":                sugerida,
+            "sim":                     sim,
+            "eid":                     eid,
+            "archivo_hash":            ahash,
+            "empresa_nombre_detectada":empresa_nombre_detectada,
         })
 
     return ok(results,
-              total    = total_found,
-              offset   = offset,
-              limit    = limit,
-              has_more = (offset + limit) < total_found,
-              pages    = max(1, -(-total_found // limit)))
+              total          = total_approx,
+              total_aproximado = total_approx,
+              total_exacto   = False,
+              offset         = offset,
+              limit          = limit,
+              has_more       = has_more,
+              pages          = None)
+
+
+@app.route("/api/importar/empresas-desde-carpeta", methods=["POST"])
+def importar_empresas_desde_carpeta():
+    """
+    Detecta nombres de empresa desde una carpeta y las crea si no existen.
+    NO importa cotizaciones. NO calcula hashes.
+    Útil como paso previo al escaneo para maximizar el matching.
+    """
+    b    = request.json or {}
+    path = clean(b.get("path") or b.get("ruta_carpeta",""))
+    if not path or not os.path.isdir(path):
+        return err(f"Carpeta no encontrada: {path!r}")
+
+    EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
+
+    # Load existing empresas
+    emp_by_nombre = {e["nombre"].lower(): e["id"]
+                     for e in db.fetchall("SELECT id, nombre FROM empresas")}
+
+    detectadas = set()
+    creadas    = []
+    existentes = 0
+    errores    = 0
+
+    for root, _, files in os.walk(path):
+        rel_root     = os.path.relpath(root, path)
+        folder_chain = ([] if rel_root == "."
+                        else rel_root.replace("\\", "/").split("/"))
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in EXTS:
+                continue
+            stem   = os.path.splitext(fname)[0]
+            nombre = _get_client_name(folder_chain, stem)
+            if not nombre or len(nombre.strip()) < 2:
+                errores += 1
+                continue
+            nombre = nombre.strip()
+            detectadas.add(nombre)
+
+    for nombre in sorted(detectadas):
+        if nombre.lower() in emp_by_nombre:
+            existentes += 1
+        else:
+            ok2 = db.agregar_empresa(nombre, "", "", "", "", "", "")
+            if ok2:
+                creadas.append(nombre)
+                emp_by_nombre[nombre.lower()] = True
+            else:
+                errores += 1
+
+    return ok({
+        "detectadas":   len(detectadas),
+        "creadas":      len(creadas),
+        "existentes":   existentes,
+        "errores":      errores,
+        "sample_creadas": creadas[:20],
+    })
 
 # ── Exportar ──────────────────────────────────────────────────────────────────
 @app.route("/api/exportar")
@@ -1154,7 +1263,7 @@ def api_diagnostico():
 @app.route("/api/verificar")
 def api_verificar():
     mods = ["flask","fuzzywuzzy","pandas","openpyxl","pdfplumber","docx","pptx","google.genai","openai"]
-    dep  = {m: importlib.util.find_spec(m) is not None for m in mods}
+    dep  = {m: _safe_find_spec(m) for m in mods}
     cols = [r.get("name") for r in db.fetchall("PRAGMA table_info(cotizaciones)")]
     req  = ["moneda","resumen","proveedor_ia","estado_ia","error_ia","archivo_hash","fecha_importacion"]
     return ok({
