@@ -1,0 +1,245 @@
+{
+    "proyecto": "v26_final",
+    "archivos": [
+        {
+            "nombre": "INSTALACION.md",
+            "ruta_relativa": "INSTALACION.md"
+        },
+        {
+            "nombre": "config_export.py",
+            "ruta_relativa": "config_export.py"
+        },
+        {
+            "nombre": "csv_utils.py",
+            "ruta_relativa": "csv_utils.py"
+        },
+        {
+            "nombre": "db_manager.py",
+            "ruta_relativa": "db_manager.py"
+        },
+        {
+            "nombre": "diagnostico_datos.py",
+            "ruta_relativa": "diagnostico_datos.py"
+        },
+        {
+            "nombre": "enriquecer_empresas_gemini.py",
+            "ruta_relativa": "enriquecer_empresas_gemini.py"
+        },
+        {
+            "nombre": "extractor_texto.py",
+            "ruta_relativa": "extractor_texto.py"
+        },
+        {
+            "nombre": "pruebas_http_stress.py",
+            "ruta_relativa": "pruebas_http_stress.py"
+        },
+        {
+            "nombre": "pruebas_stress.py",
+            "ruta_relativa": "pruebas_stress.py"
+        },
+        {
+            "nombre": "resumidor.py",
+            "ruta_relativa": "resumidor.py"
+        },
+        {
+            "nombre": "server.py",
+            "ruta_relativa": "server.py"
+        },
+        {
+            "nombre": "test_suite.py",
+            "ruta_relativa": "test_suite.py"
+        },
+        {
+            "nombre": "utils.py",
+            "ruta_relativa": "utils.py"
+        },
+        {
+            "nombre": "verificar_instalacion.py",
+            "ruta_relativa": "verificar_instalacion.py"
+        },
+        {
+            "nombre": "INSTALACION.md",
+            "ruta_relativa": "v25_merged\\INSTALACION.md"
+        },
+        {
+            "nombre": "config_export.py",
+            "ruta_relativa": "v25_merged\\config_export.py"
+        },
+        {
+            "nombre": "csv_utils.py",
+            "ruta_relativa": "v25_merged\\csv_utils.py"
+        },
+        {
+            "nombre": "db_manager.py",
+            "ruta_relativa": "v25_merged\\db_manager.py"
+        },
+        {
+            "nombre": "diagnostico_datos.py",
+            "ruta_relativa": "v25_merged\\diagnostico_datos.py"
+        },
+        {
+            "nombre": "enriquecer_empresas_gemini.py",
+            "ruta_relativa": "v25_merged\\enriquecer_empresas_gemini.py"
+        },
+        {
+            "nombre": "extractor_texto.py",
+            "ruta_relativa": "v25_merged\\extractor_texto.py"
+        },
+        {
+            "nombre": "pruebas_http_stress.py",
+            "ruta_relativa": "v25_merged\\pruebas_http_stress.py"
+        },
+        {
+            "nombre": "pruebas_stress.py",
+            "ruta_relativa": "v25_merged\\pruebas_stress.py"
+        },
+        {
+            "nombre": "resumidor.py",
+            "ruta_relativa": "v25_merged\\resumidor.py"
+        },
+        {
+            "nombre": "server.py",
+            "ruta_relativa": "v25_merged\\server.py"
+        },
+        {
+            "nombre": "utils.py",
+            "ruta_relativa": "v25_merged\\utils.py"
+        },
+        {
+            "nombre": "verificar_instalacion.py",
+            "ruta_relativa": "v25_merged\\verificar_instalacion.py"
+        }
+    ],
+    "relaciones": [
+        {
+            "origen": "enriquecer_empresas_gemini.py",
+            "destino": "config_export.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "enriquecer_empresas_gemini.py",
+            "destino": "db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "enriquecer_empresas_gemini.py",
+            "destino": "utils.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "pruebas_http_stress.py",
+            "destino": "db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "pruebas_http_stress.py",
+            "destino": "server.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "pruebas_stress.py",
+            "destino": "csv_utils.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "pruebas_stress.py",
+            "destino": "db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "pruebas_stress.py",
+            "destino": "utils.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "resumidor.py",
+            "destino": "config_export.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "server.py",
+            "destino": "config_export.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "server.py",
+            "destino": "db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "server.py",
+            "destino": "utils.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "test_suite.py",
+            "destino": "db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "test_suite.py",
+            "destino": "utils.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\enriquecer_empresas_gemini.py",
+            "destino": "v25_merged\\config_export.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\enriquecer_empresas_gemini.py",
+            "destino": "v25_merged\\db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\enriquecer_empresas_gemini.py",
+            "destino": "v25_merged\\utils.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\pruebas_http_stress.py",
+            "destino": "v25_merged\\db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\pruebas_http_stress.py",
+            "destino": "v25_merged\\server.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\pruebas_stress.py",
+            "destino": "v25_merged\\csv_utils.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\pruebas_stress.py",
+            "destino": "v25_merged\\db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\pruebas_stress.py",
+            "destino": "v25_merged\\utils.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\resumidor.py",
+            "destino": "v25_merged\\config_export.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\server.py",
+            "destino": "v25_merged\\config_export.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\server.py",
+            "destino": "v25_merged\\db_manager.py",
+            "tipo": "importa"
+        },
+        {
+            "origen": "v25_merged\\server.py",
+            "destino": "v25_merged\\utils.py",
+            "tipo": "importa"
+        }
+    ]
+}
