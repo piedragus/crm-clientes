@@ -1745,7 +1745,7 @@ async function loadFilterPreset(nombre) {
   document.getElementById("fl-tag").value   = f.tag   || "";
   document.getElementById("fl-cot").value   = f.cotizaciones_cond || "";
   document.getElementById("fl-con").value   = f.contactos_cond    || "";
-  document.getElementById("fl-dias").value  = f.dias_cotizacion   || 0;
+  document.getElementById("fl-dias").value  = f.dias_actividad    || 0;
 }
 
 async function deleteFilterPreset(nombre) {
@@ -1770,7 +1770,7 @@ function currentFiltersFromModal() {
   if (tag)   f.tag   = tag;
   if (cot)   f.cotizaciones_cond = cot;
   if (con)   f.contactos_cond    = con;
-  if (dias)  f.dias_cotizacion   = dias;
+  if (dias)  f.dias_actividad    = dias;
   return f;
 }
 
@@ -1784,7 +1784,7 @@ async function loadFilterPreset(nombre) {
   document.getElementById("fl-tag").value   = f.tag   || "";
   document.getElementById("fl-cot").value   = f.cotizaciones_cond || "";
   document.getElementById("fl-con").value   = f.contactos_cond    || "";
-  document.getElementById("fl-dias").value  = f.dias_cotizacion   || "0";
+  document.getElementById("fl-dias").value  = f.dias_actividad    || "0";
 }
 
 async function saveFilterPreset() {
@@ -1802,7 +1802,7 @@ async function saveFilterPreset() {
   if (tag)   f.tag   = tag;
   if (cot)   f.cotizaciones_cond = cot;
   if (con)   f.contactos_cond    = con;
-  if (dias)  f.dias_cotizacion   = dias;
+  if (dias)  f.dias_actividad    = dias;
   const r = await POST("/api/config/filtros", {nombre, filtros: f});
   if (r.ok) { toast(`Filtro "${nombre}" guardado`); showFilters(); }
   else toast(r.error || "Error", "err");
