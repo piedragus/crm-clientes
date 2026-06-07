@@ -195,6 +195,14 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 #dupes-modal .modal{width:800px}
 
 /* Loader */
+.tools-section{font-size:9px;font-weight:700;color:var(--muted);
+               text-transform:uppercase;letter-spacing:.5px;
+               padding:8px 14px 4px}
+.tools-item{padding:8px 14px;font-size:12px;color:var(--txt2);
+            cursor:pointer;transition:background .1s}
+.tools-item:hover{background:var(--bg);color:var(--txt)}
+.tools-sep{height:1px;background:var(--border);margin:4px 0}
+
 .spinner{display:inline-block;width:14px;height:14px;
          border:2px solid var(--border);border-top-color:var(--accent);
          border-radius:50%;animation:spin .6s linear infinite}
@@ -280,6 +288,37 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     <span id="filter-badge"></span>
     <div id="topbar-right">
       <button class="btn btn-dark" onclick="showSearch()">Buscar cotizaciones</button>
+      <!-- Tools dropdown -->
+      <div style="position:relative;display:inline-block">
+        <button class="btn btn-dark" id="btn-tools"
+                onclick="toggleToolsMenu()"
+                style="display:flex;align-items:center;gap:6px">
+          ⚙ Herramientas <span style="font-size:9px">▼</span>
+        </button>
+        <div id="tools-menu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);
+             background:var(--panel);border:1px solid var(--border);border-radius:6px;
+             min-width:220px;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.12);overflow:hidden">
+          <div class="tools-section">IMPORTAR</div>
+          <div class="tools-item" onclick="closeToolsMenu();showImportCSV()">📧 CSV de mails / contactos</div>
+          <div class="tools-item" onclick="closeToolsMenu();showImportCarpeta()">📁 Carpeta de cotizaciones</div>
+          <div class="tools-sep"></div>
+          <div class="tools-section">EXPORTAR</div>
+          <div class="tools-item" onclick="closeToolsMenu();doExport('xlsx')">📊 Exportar Excel</div>
+          <div class="tools-item" onclick="closeToolsMenu();doExport('csv')">📄 Exportar CSV</div>
+          <div class="tools-sep"></div>
+          <div class="tools-section">GESTIÓN</div>
+          <div class="tools-item" onclick="closeToolsMenu();showDupes()">🔍 Buscar duplicados</div>
+          <div class="tools-item" onclick="closeToolsMenu();doBackup()">💾 Hacer backup</div>
+          <div class="tools-item" onclick="closeToolsMenu();doRestore()">↩ Restaurar backup</div>
+          <div class="tools-sep"></div>
+          <div class="tools-section">IA</div>
+          <div class="tools-item" onclick="closeToolsMenu();showEnriquecer()">✦ Enriquecer nombres</div>
+          <div class="tools-sep"></div>
+          <div class="tools-section">SISTEMA</div>
+          <div class="tools-item" onclick="closeToolsMenu();showDiagnostico()">🔧 Diagnóstico</div>
+          <div class="tools-item" onclick="closeToolsMenu();showVerificacion()">✓ Verificar instalación</div>
+        </div>
+      </div>
       <button class="btn btn-primary" onclick="showNewEmpresa()">+ Nueva empresa</button>
     </div>
   </div>
@@ -1965,6 +2004,25 @@ document.addEventListener("keydown", e => {
     if (!activeModal) return;
     const saveBtns = activeModal.querySelectorAll(".modal-footer .btn-primary");
     if (saveBtns.length === 1) saveBtns[0].click();
+  }
+});
+
+// ── Tools menu ───────────────────────────────────────────────────────────────
+function toggleToolsMenu() {
+  const m = document.getElementById("tools-menu");
+  m.style.display = m.style.display === "none" ? "block" : "none";
+}
+
+function closeToolsMenu() {
+  document.getElementById("tools-menu").style.display = "none";
+}
+
+// Close tools menu when clicking outside
+document.addEventListener("click", e => {
+  const btn  = document.getElementById("btn-tools");
+  const menu = document.getElementById("tools-menu");
+  if (menu && btn && !btn.contains(e.target) && !menu.contains(e.target)) {
+    menu.style.display = "none";
   }
 });
 
