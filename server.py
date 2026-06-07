@@ -310,7 +310,12 @@ def get_oportunidades():
     for k in ("etapa","empresa_id"):
         v = request.args.get(k)
         if v: filtros[k] = v
-    return ok(db.get_oportunidades(filtros))
+    rows = db.get_oportunidades(filtros)
+    # Filter by fase post-query (fase is derived, not stored)
+    fase = request.args.get("fase","").strip().lower()
+    if fase in ("venta","posventa"):
+        rows = [r for r in rows if r.get("fase") == fase]
+    return ok(rows)
 
 
 @app.route("/api/oportunidades", methods=["POST"])

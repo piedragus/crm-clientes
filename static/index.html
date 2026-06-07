@@ -909,7 +909,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     <div class="modal-body">
       <div class="form-grid">
         <div class="field" style="grid-column:1/-1">
-          <label>Empresa *</label>
+          <label id="mo-empresa-label">Empresa *</label>
           <select id="mo-empresa" style="border:1px solid var(--border);padding:5px 8px;
                   border-radius:4px;font-size:12px;background:var(--bg)">
             <option value="">— Seleccioná una empresa —</option>
@@ -2578,6 +2578,7 @@ async function showNuevaOportunidad(eid=null) {
   document.getElementById("modal-oport-title").textContent = "Nueva Oportunidad";
   // Populate empresa select
   const sel = document.getElementById("mo-empresa");
+  sel.disabled = false;  // Habilitado para nuevas oportunidades
   sel.innerHTML = '<option value="">— Seleccioná una empresa —</option>' +
     S.allEmpresas.map(e =>
       `<option value="${e.id}" ${e.id===eid?"selected":""}>${esc(e.nombre)}</option>`
@@ -2598,10 +2599,11 @@ async function editarOportunidad(oid) {
   PIP.editId = oid;
   document.getElementById("modal-oport-title").textContent = "Editar Oportunidad";
   const sel = document.getElementById("mo-empresa");
-  sel.innerHTML = '<option value="">— Seleccioná —</option>' +
-    S.allEmpresas.map(e =>
-      `<option value="${e.id}" ${e.id===o.empresa_id?"selected":""}>${esc(e.nombre)}</option>`
-    ).join("");
+  sel.innerHTML = S.allEmpresas
+    .filter(e => e.id === o.empresa_id)
+    .map(e => `<option value="${e.id}" selected>${esc(e.nombre)}</option>`)
+    .join("") || `<option value="${o.empresa_id}">${esc(o.empresa_nombre||"")}</option>`;
+  sel.disabled = true;  // No se cambia la empresa en edición
   document.getElementById("mo-titulo").value       = o.titulo||"";
   document.getElementById("mo-descripcion").value  = o.descripcion||"";
   document.getElementById("mo-etapa").value         = o.etapa||"prospecto";

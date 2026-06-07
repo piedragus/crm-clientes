@@ -1046,6 +1046,8 @@ class DBManager:
             if k == "etapa":
                 v = self._normalizar_etapa(v)
                 if not v: continue
+            if k == "titulo" and not str(v or "").strip():
+                continue  # reject empty titulo silently (caller checks rowcount)
             sets.append(f"{k}=?"); vals.append(v)
         if not sets: return False
         sets.append("fecha_ultimo_cambio=?")

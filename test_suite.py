@@ -4486,6 +4486,54 @@ class TestOportunidades(unittest.TestCase):
         self.assertIsNotNone(
             self.db.fetchall("SELECT * FROM oportunidades"))
 
+
+    def test_editar_titulo_vacio_ignorado(self):
+        """editar_oportunidad con titulo='' no debe pisar el título existente."""
+        self.db.crear_oportunidad(self.eid, "Título original")
+        oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
+        # Empty titulo should be ignored, not saved
+        self.db.editar_oportunidad(oid, titulo="", descripcion="Nueva desc")
+        row = self.db.get_oportunidad_por_id(oid)
+        self.assertEqual(row["titulo"], "Título original",
+            "titulo vacío no debe sobreescribir el título existente")
+        self.assertEqual(row["descripcion"], "Nueva desc")
+
+    def test_filtro_fase_venta_endpoint(self):
+        """GET /api/oportunidades?fase=venta solo devuelve fase venta."""
+        import sys; sys.path.insert(0, '/home/claude/v26')
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        client = _app.test_client()
+        _db.crear_oportunidad(self.eid, "Fase venta",   etapa="prospecto")
+        _db.crear_oportunidad(self.eid, "Fase posventa",etapa="en_proceso")
+        r = client.get("/api/oportunidades?fase=venta")
+        self.assertEqual(r.status_code, 200)
+        rows = r.get_json()["data"]
+        self.assertTrue(all(row["fase"] == "venta" for row in rows
+                            if row["empresa_id"] == self.eid),
+            "fase=venta debe devolver solo oportunidades de fase venta")
+
+    def test_filtro_fase_posventa_endpoint(self):
+        """GET /api/oportunidades?fase=posventa solo devuelve fase posventa."""
+        import sys; sys.path.insert(0, '/home/claude/v26')
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        client = _app.test_client()
+        _db.crear_oportunidad(self.eid, "Posventa test", etapa="en_proceso")
+        r = client.get("/api/oportunidades?fase=posventa")
+        self.assertEqual(r.status_code, 200)
+        rows = r.get_json()["data"]
+        self.assertTrue(all(row["fase"] == "posventa" for row in rows),
+            "fase=posventa debe devolver solo oportunidades de fase posventa")
+
+    def test_ui_selector_empresa_deshabilitado_en_edicion(self):
+        """editarOportunidad() debe deshabilitar el selector de empresa."""
+        html = open('/home/claude/v26/static/index.html').read()
+        self.assertIn('sel.disabled = true', html,
+            "El selector de empresa debe deshabilitarse en modo edición")
+        self.assertIn('sel.disabled = false', html,
+            "El selector de empresa debe habilitarse para nueva oportunidad")
+
     def test_editar_oportunidad(self):
         self.db.crear_oportunidad(self.eid, "Original")
         oid = self.db.get_oportunidades_empresa(self.eid)[0]["id"]
