@@ -924,8 +924,9 @@ function renderEmpresaDetail() {
 
 function enableDetailBtns(on) {
   ["btn-edit","btn-hist","btn-valid","btn-del",
-   "btn-add-con","btn-add-cot"].forEach(id => {
-    document.getElementById(id).disabled = !on;
+   "btn-add-con","btn-add-cot","btn-add-act"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !on;
   });
 }
 
@@ -986,6 +987,11 @@ async function delEmpresa() {
   enableDetailBtns(false);
   document.getElementById("con-body").innerHTML = "";
   document.getElementById("cot-body").innerHTML = "";
+  document.getElementById("act-timeline").innerHTML =
+    '<div style="text-align:center;padding:20px;color:var(--muted);font-size:12px">Seleccioná una empresa</div>';
+  const actTxt = document.getElementById("act-texto");
+  if (actTxt) actTxt.value = "";
+  S.actividades = [];
   await Promise.all([loadEmpresas(), loadStats()]);
 }
 

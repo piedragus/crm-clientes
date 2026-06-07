@@ -4340,6 +4340,68 @@ class TestActividades(unittest.TestCase):
         self.assertEqual(len(ids_p1 & ids_p2), 0, "Páginas no deben solaparse")
 
 
+
+
+    def test_server_filtro_dias_actividad(self):
+        """
+        /api/empresas?dias_actividad=30 devuelve solo empresas sin actividad
+        en los últimos 30 días.
+        """
+        import sys; sys.path.insert(0, '/home/claude/v26')
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        client = _app.test_client()
+
+        # Empresa activa — tiene actividad reciente
+        _db.agregar_empresa("FiltroActiva SA","","","","","","")
+        eact = _db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='FiltroActiva SA'")["id"]
+        _db.agregar_actividad(eact, "nota", "Actividad de hoy")
+
+        # Empresa inactiva — sin actividad
+        _db.agregar_empresa("FiltroInactiva SA","","","","","","")
+        einact = _db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='FiltroInactiva SA'")["id"]
+
+        r = client.get("/api/empresas?dias_actividad=30")
+        self.assertEqual(r.status_code, 200)
+        ids = {e["id"] for e in r.get_json()["data"]}
+        self.assertIn(einact, ids,
+            "Empresa sin actividad debe aparecer en filtro")
+        self.assertNotIn(eact, ids,
+            "Empresa con actividad reciente NO debe aparecer")
+
+        _db.eliminar_empresa(eact)
+        _db.eliminar_empresa(einact)
+
+    def test_ui_habilita_boton_actividad(self):
+        """enableDetailBtns debe incluir btn-add-act."""
+        import re
+        html = open('/home/claude/v26/static/index.html').read()
+        self.assertIn('"btn-add-act"', html,
+            "btn-add-act debe existir en el HTML")
+        block = re.search(
+            r'function enableDetailBtns[\s\S]*?\}', html)
+        self.assertIsNotNone(block)
+        self.assertIn('btn-add-act', block.group(),
+            "enableDetailBtns debe habilitar btn-add-act")
+
+    def test_ui_filtro_manda_dias_actividad(self):
+        """applyFilters debe enviar dias_actividad, no dias_cotizacion."""
+        html = open('/home/claude/v26/static/index.html').read()
+        import re
+        # Check días field sends dias_actividad not dias_cotizacion
+        import re as _re
+        # Extract the full applyFilters function (up to closing brace on its own line)
+        block = _re.search(
+            r"function applyFilters\(\)[^}]+(?:[^}]+\})+", html)
+        self.assertIsNotNone(block, "applyFilters no encontrada en HTML")
+        fn = block.group()
+        self.assertIn('dias_actividad', fn,
+            "applyFilters debe mandar dias_actividad")
+        self.assertNotIn('dias_cotizacion', fn,
+            "applyFilters no debe mandar dias_cotizacion")
+
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
         import sys; sys.path.insert(0, '/home/claude/v26')

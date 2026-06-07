@@ -159,6 +159,8 @@ def get_empresas():
         if v: filtros[k] = v
     dias = to_int(request.args.get("dias_cotizacion"), 0, lo=0)
     if dias: filtros["dias_cotizacion"] = dias
+    dias_act = to_int(request.args.get("dias_actividad"), 0, lo=0)
+    if dias_act: filtros["dias_actividad"] = dias_act
 
     rows   = db.get_filtered_empresas(q, filtros)
     result = []
