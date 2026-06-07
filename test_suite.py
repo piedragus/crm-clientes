@@ -4166,6 +4166,325 @@ class TestStressConcurrenciaCriticos(unittest.TestCase):
 
 
 
+
+class TestActividades(unittest.TestCase):
+    def setUp(self): self.db = fresh_db()
+
+    def test_agregar_actividad_basico(self):
+        eid = make_emp(self.db)
+        ok = self.db.agregar_actividad(eid, "llamada", "Llamé a Juan, OK para marzo")
+        self.assertTrue(ok)
+        acts = self.db.get_actividades_empresa(eid)
+        self.assertEqual(len(acts), 1)
+        self.assertEqual(acts[0]["tipo"], "llamada")
+        self.assertIn("Juan", acts[0]["texto"])
+
+    def test_tipos_validos(self):
+        eid = make_emp(self.db)
+        for tipo in ("llamada","email","reunion","nota"):
+            self.assertTrue(self.db.agregar_actividad(eid, tipo, f"Test {tipo}"))
+        acts = self.db.get_actividades_empresa(eid)
+        self.assertEqual(len(acts), 4)
+
+    def test_orden_reciente_primero(self):
+        eid = make_emp(self.db)
+        self.db.agregar_actividad(eid, "nota", "Primera")
+        self.db.agregar_actividad(eid, "nota", "Segunda")
+        self.db.agregar_actividad(eid, "nota", "Tercera")
+        acts = self.db.get_actividades_empresa(eid)
+        self.assertEqual(acts[0]["texto"], "Tercera")
+
+    def test_agregar_texto_vacio_falla(self):
+        eid = make_emp(self.db)
+        self.assertFalse(self.db.agregar_actividad(eid, "nota", ""))
+        self.assertFalse(self.db.agregar_actividad(eid, "nota", "   "))
+
+    def test_agregar_empresa_id_none(self):
+        try:
+            ok = self.db.agregar_actividad(None, "nota", "Texto")
+            self.assertFalse(ok)
+        except Exception as e:
+            self.fail(f"Crash empresa_id=None: {e}")
+
+    def test_editar_actividad(self):
+        eid = make_emp(self.db)
+        self.db.agregar_actividad(eid, "nota", "Original")
+        aid = self.db.get_actividades_empresa(eid)[0]["id"]
+        ok = self.db.editar_actividad(aid, "llamada", "Editado")
+        self.assertTrue(ok)
+        act = self.db.fetchone("SELECT * FROM actividades WHERE id=?", (aid,))
+        self.assertEqual(act["texto"], "Editado")
+        self.assertEqual(act["tipo"], "llamada")
+
+    def test_editar_inexistente(self):
+        ok = self.db.editar_actividad(99999, "nota", "X")
+        self.assertFalse(ok)
+
+    def test_eliminar_actividad(self):
+        eid = make_emp(self.db)
+        self.db.agregar_actividad(eid, "nota", "Para borrar")
+        aid = self.db.get_actividades_empresa(eid)[0]["id"]
+        self.db.eliminar_actividad(aid)
+        self.assertEqual(len(self.db.get_actividades_empresa(eid)), 0)
+
+    def test_eliminar_empresa_elimina_actividades(self):
+        eid = make_emp(self.db)
+        self.db.agregar_actividad(eid, "nota", "Nota orphan test")
+        self.db.eliminar_empresa(eid)
+        huerfanas = self.db.fetchall(
+            "SELECT * FROM actividades WHERE empresa_id=?", (eid,))
+        self.assertEqual(len(huerfanas), 0)
+
+    def test_get_actividades_recientes(self):
+        eid = make_emp(self.db)
+        self.db.agregar_actividad(eid, "llamada", "Reciente 1")
+        self.db.agregar_actividad(eid, "email",   "Reciente 2")
+        recientes = self.db.get_actividades_recientes(dias=7, limit=50)
+        self.assertGreaterEqual(len(recientes), 2)
+        self.assertIn("empresa_nombre", recientes[0])
+
+    def test_sql_injection_en_texto(self):
+        eid = make_emp(self.db)
+        try:
+            self.db.agregar_actividad(
+                eid, "nota", "'; DROP TABLE actividades;--")
+        except Exception as e:
+            self.fail(f"Crash SQL injection: {e}")
+        self.assertIsNotNone(
+            self.db.fetchall("SELECT * FROM actividades"))
+
+    def test_texto_largo(self):
+        eid = make_emp(self.db)
+        texto_largo = "A" * 5000
+        ok = self.db.agregar_actividad(eid, "nota", texto_largo)
+        self.assertTrue(ok)
+        act = self.db.get_actividades_empresa(eid)[0]
+        self.assertEqual(len(act["texto"]), 5000)
+
+    def test_multiples_empresas_aisladas(self):
+        e1 = make_emp(self.db, "E1"); e2 = make_emp(self.db, "E2")
+        self.db.agregar_actividad(e1, "nota", "De E1")
+        self.db.agregar_actividad(e2, "nota", "De E2")
+        self.assertEqual(len(self.db.get_actividades_empresa(e1)), 1)
+        self.assertEqual(len(self.db.get_actividades_empresa(e2)), 1)
+
+    def test_concurrencia_agregar_actividades(self):
+        eid = make_emp(self.db)
+        errors = []
+        def writer(n):
+            for i in range(20):
+                ok = self.db.agregar_actividad(
+                    eid, "nota", f"Thread {n} nota {i}")
+                if not ok: errors.append(f"T{n}_{i}")
+        threads = [threading.Thread(target=writer, args=(t,))
+                   for t in range(5)]
+        for t in threads: t.start()
+        for t in threads: t.join(timeout=15)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(self.db.get_actividades_empresa(eid)), 100)
+
+    def test_empresa_inexistente_rechazada(self):
+        """agregar_actividad devuelve False si la empresa no existe."""
+        ok = self.db.agregar_actividad(99999, "nota", "Texto huérfano")
+        self.assertFalse(ok, "Debe rechazar empresa inexistente")
+        huerfanas = self.db.fetchall(
+            "SELECT * FROM actividades WHERE empresa_id=99999")
+        self.assertEqual(len(huerfanas), 0)
+
+    def test_eliminar_inexistente_devuelve_false(self):
+        """eliminar_actividad devuelve False si no existe la actividad."""
+        ok = self.db.eliminar_actividad(99999)
+        self.assertFalse(ok)
+
+    def test_editar_inexistente_devuelve_false(self):
+        ok = self.db.editar_actividad(99999, "nota", "Texto")
+        self.assertFalse(ok)
+
+    def test_tipo_invalido_normaliza_a_nota(self):
+        eid = make_emp(self.db)
+        self.assertTrue(self.db.agregar_actividad(eid, "hacker", "Texto"))
+        acts = self.db.get_actividades_empresa(eid)
+        self.assertEqual(acts[0]["tipo"], "nota",
+            "Tipo inválido debe normalizarse a 'nota'")
+
+    def test_todos_tipos_validos(self):
+        eid = make_emp(self.db)
+        for tipo in ("nota","llamada","email","reunion"):
+            self.assertTrue(
+                self.db.agregar_actividad(eid, tipo, f"Test {tipo}"))
+            acts = self.db.get_actividades_empresa(eid)
+            self.assertEqual(acts[0]["tipo"], tipo)
+
+    def test_filtro_dias_actividad(self):
+        """Empresas sin actividad reciente aparecen en el filtro."""
+        e_activa   = make_emp(self.db, "Activa SA")
+        e_inactiva = make_emp(self.db, "Inactiva SA")
+        self.db.agregar_actividad(e_activa, "nota", "Actividad hoy")
+        result = self.db.get_filtered_empresas("", {"dias_actividad": 30})
+        ids = {r["id"] for r in result}
+        self.assertIn(e_inactiva, ids,
+            "Empresa sin actividad debe aparecer en filtro")
+        self.assertNotIn(e_activa, ids,
+            "Empresa con actividad reciente NO debe aparecer")
+
+    def test_paginacion_actividades(self):
+        eid = make_emp(self.db)
+        for i in range(50):
+            self.db.agregar_actividad(eid, "nota", f"Nota {i}")
+        pag1 = self.db.get_actividades_empresa(eid, limit=10, offset=0)
+        pag2 = self.db.get_actividades_empresa(eid, limit=10, offset=10)
+        self.assertEqual(len(pag1), 10)
+        self.assertEqual(len(pag2), 10)
+        ids_p1 = {a["id"] for a in pag1}
+        ids_p2 = {a["id"] for a in pag2}
+        self.assertEqual(len(ids_p1 & ids_p2), 0, "Páginas no deben solaparse")
+
+
+
+
+    def test_server_filtro_dias_actividad(self):
+        """
+        /api/empresas?dias_actividad=30 devuelve solo empresas sin actividad
+        en los últimos 30 días.
+        """
+        import sys; sys.path.insert(0, '/home/claude/v26')
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        client = _app.test_client()
+
+        # Empresa activa — tiene actividad reciente
+        _db.agregar_empresa("FiltroActiva SA","","","","","","")
+        eact = _db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='FiltroActiva SA'")["id"]
+        _db.agregar_actividad(eact, "nota", "Actividad de hoy")
+
+        # Empresa inactiva — sin actividad
+        _db.agregar_empresa("FiltroInactiva SA","","","","","","")
+        einact = _db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='FiltroInactiva SA'")["id"]
+
+        r = client.get("/api/empresas?dias_actividad=30")
+        self.assertEqual(r.status_code, 200)
+        ids = {e["id"] for e in r.get_json()["data"]}
+        self.assertIn(einact, ids,
+            "Empresa sin actividad debe aparecer en filtro")
+        self.assertNotIn(eact, ids,
+            "Empresa con actividad reciente NO debe aparecer")
+
+        _db.eliminar_empresa(eact)
+        _db.eliminar_empresa(einact)
+
+    def test_ui_habilita_boton_actividad(self):
+        """enableDetailBtns debe incluir btn-add-act."""
+        import re
+        html = open('/home/claude/v26/static/index.html').read()
+        self.assertIn('"btn-add-act"', html,
+            "btn-add-act debe existir en el HTML")
+        block = re.search(
+            r'function enableDetailBtns[\s\S]*?\}', html)
+        self.assertIsNotNone(block)
+        self.assertIn('btn-add-act', block.group(),
+            "enableDetailBtns debe habilitar btn-add-act")
+
+    def test_ui_filtro_manda_dias_actividad(self):
+        """applyFilters debe enviar dias_actividad, no dias_cotizacion."""
+        html = open('/home/claude/v26/static/index.html').read()
+        import re
+        # Check días field sends dias_actividad not dias_cotizacion
+        import re as _re
+        # Extract the full applyFilters function (up to closing brace on its own line)
+        block = _re.search(
+            r"function applyFilters\(\)[^}]+(?:[^}]+\})+", html)
+        self.assertIsNotNone(block, "applyFilters no encontrada en HTML")
+        fn = block.group()
+        self.assertIn('dias_actividad', fn,
+            "applyFilters debe mandar dias_actividad")
+        self.assertNotIn('dias_cotizacion', fn,
+            "applyFilters no debe mandar dias_cotizacion")
+
+class TestActividadesHTTP(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, '/home/claude/v26')
+        from server import app, db as _db
+        app.config['TESTING'] = True
+        self.client = app.test_client()
+        self.db = _db
+        self.db.agregar_empresa("ActHTTP SA","","","","","","")
+        r = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='ActHTTP SA'")
+        self.eid = r["id"]
+
+    def tearDown(self):
+        self.db.eliminar_empresa(self.eid)
+
+    def test_post_actividad(self):
+        r = self.client.post(
+            f"/api/empresas/{self.eid}/actividades",
+            json={"tipo":"llamada","texto":"Test HTTP llamada"})
+        self.assertEqual(r.status_code, 201)
+
+    def test_get_actividades(self):
+        self.db.agregar_actividad(self.eid, "email", "Test get")
+        r = self.client.get(f"/api/empresas/{self.eid}/actividades")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()["data"]
+        self.assertTrue(any(a["texto"] == "Test get" for a in data))
+
+    def test_put_actividad(self):
+        self.db.agregar_actividad(self.eid, "nota", "Original")
+        aid = self.db.get_actividades_empresa(self.eid)[0]["id"]
+        r = self.client.put(f"/api/actividades/{aid}",
+                            json={"tipo":"reunion","texto":"Editado"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_delete_actividad(self):
+        self.db.agregar_actividad(self.eid, "nota", "Para borrar HTTP")
+        aid = self.db.get_actividades_empresa(self.eid)[0]["id"]
+        r = self.client.delete(f"/api/actividades/{aid}")
+        self.assertEqual(r.status_code, 200)
+
+    def test_post_texto_vacio_da_400(self):
+        r = self.client.post(
+            f"/api/empresas/{self.eid}/actividades",
+            json={"tipo":"nota","texto":""})
+        self.assertEqual(r.status_code, 400)
+
+    def test_get_actividades_recientes(self):
+        self.db.agregar_actividad(self.eid, "llamada", "Reciente")
+        r = self.client.get("/api/actividades/recientes?dias=7")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()["data"]
+        self.assertGreater(len(data), 0)
+        self.assertIn("empresa_nombre", data[0])
+
+    def test_get_empresa_inexistente_404(self):
+        r = self.client.get("/api/empresas/999999/actividades")
+        self.assertEqual(r.status_code, 404)
+
+    def test_post_empresa_inexistente_404(self):
+        r = self.client.post("/api/empresas/999999/actividades",
+                             json={"tipo":"nota","texto":"Huérfana"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_delete_actividad_inexistente_404(self):
+        r = self.client.delete("/api/actividades/999999")
+        self.assertEqual(r.status_code, 404)
+
+    def test_put_actividad_inexistente_404(self):
+        r = self.client.put("/api/actividades/999999",
+                            json={"tipo":"nota","texto":"X"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_tipo_invalido_normaliza_en_api(self):
+        r = self.client.post(
+            f"/api/empresas/{self.eid}/actividades",
+            json={"tipo":"inyeccion_sql","texto":"Test"})
+        self.assertEqual(r.status_code, 201)
+        acts = self.client.get(
+            f"/api/empresas/{self.eid}/actividades").get_json()["data"]
+        self.assertEqual(acts[0]["tipo"], "nota")
+
+
 # RUNNER
 # =====================================================================
 if __name__ == "__main__":

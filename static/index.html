@@ -202,6 +202,36 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 .loading-row td{text-align:center;color:var(--muted);padding:20px}
 
 /* Placeholder */
+
+/* Timeline actividades */
+.timeline{display:flex;flex-direction:column;gap:0}
+.tl-item{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}
+.tl-item:last-child{border-bottom:none}
+.tl-icon{width:28px;height:28px;border-radius:50%;display:flex;
+         align-items:center;justify-content:center;font-size:13px;
+         flex-shrink:0;margin-top:2px}
+.tl-llamada{background:#DBEAFE}.tl-email{background:#DCFCE7}
+.tl-reunion{background:#FEF3C7}.tl-nota{background:#F3F4F6}
+.tl-body{flex:1;min-width:0}
+.tl-meta{font-size:10px;color:var(--muted);margin-bottom:2px;
+         display:flex;gap:8px;align-items:center}
+.tl-tipo{font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.tl-texto{font-size:12px;color:var(--txt);line-height:1.5;
+          word-break:break-word}
+.tl-actions{display:flex;gap:4px;margin-left:auto;opacity:0;transition:opacity .15s}
+.tl-item:hover .tl-actions{opacity:1}
+.tl-input{display:flex;gap:6px;padding:10px 0 6px;flex-shrink:0}
+.tl-input select{border:1px solid var(--border);padding:5px 8px;
+                 border-radius:4px;font-size:12px;background:var(--bg)}
+.tl-input input{flex:1;border:1px solid var(--border);padding:5px 10px;
+                border-radius:4px;font-size:12px;outline:none}
+.tl-input input:focus{border-color:var(--accent);background:#fff}
+/* Actividades recientes en sidebar */
+#act-recientes{padding:6px 8px;max-height:200px;overflow-y:auto}
+.act-rec-item{font-size:10px;padding:3px 4px;border-radius:3px;
+              margin-bottom:2px;cursor:pointer;color:var(--txt2)}
+.act-rec-item:hover{background:var(--sidebar2);color:#fff}
+.act-rec-empresa{font-weight:700;color:#93C5FD}
 #placeholder{display:flex;flex-direction:column;align-items:center;
              justify-content:center;flex:1;color:var(--muted);gap:8px;
              font-size:13px}
@@ -233,7 +263,11 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
   <div class="nav-item" onclick="showVerificacion()">Verificar instalación</div>
   <div class="nav-sep">IA</div>
   <div class="nav-item" onclick="showEnriquecer()">Enriquecer nombres (Gemini/Grok)</div>
-  <div id="sidebar-ver">v25</div>
+  <div class="nav-sep">Actividad reciente</div>
+  <div id="act-recientes">
+    <div style="font-size:10px;color:var(--muted);padding:4px 8px">Cargando…</div>
+  </div>
+  <div id="sidebar-ver">v26</div>
 </div>
 
 <!-- Main -->
@@ -295,6 +329,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
       <div id="tabs">
         <div class="tab active" onclick="switchTab('empresa')">Empresa / Contactos</div>
         <div class="tab" onclick="switchTab('cotizaciones')">Cotizaciones</div>
+        <div class="tab" onclick="switchTab('actividad')">Actividad</div>
       </div>
 
       <!-- Tab Empresa/Contactos -->
@@ -342,6 +377,29 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <tbody id="cot-body"></tbody></table>
         </div>
         <div id="cot-resumen"><span class="lbl">Resumen:</span><span id="cot-resumen-txt">—</span></div>
+      </div>
+
+      <!-- Tab Actividad -->
+      <div id="tab-actividad" class="tab-panel">
+        <!-- Input rápido -->
+        <div class="tl-input">
+          <select id="act-tipo" style="width:130px">
+            <option value="nota">📝 Nota</option>
+            <option value="llamada">📞 Llamada</option>
+            <option value="email">✉️ Email</option>
+            <option value="reunion">🤝 Reunión</option>
+          </select>
+          <input id="act-texto" placeholder="Escribí una nota o registrá actividad… (Enter para guardar)"
+                 onkeydown="if(event.key==='Enter')agregarActividad()">
+          <button class="btn btn-ok" id="btn-add-act" onclick="agregarActividad()" disabled>+</button>
+        </div>
+        <div style="flex:1;overflow-y:auto">
+          <div class="timeline" id="act-timeline">
+            <div style="text-align:center;padding:20px;color:var(--muted);font-size:12px">
+              Seleccioná una empresa para ver su actividad
+            </div>
+          </div>
+        </div>
       </div>
 
       <div id="placeholder" style="display:none">
@@ -675,7 +733,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <option value="con">Solo con contactos</option>
           <option value="sin">Solo sin contactos</option>
         </select></div>
-      <div class="field"><label>Sin actividad en más de (días, 0=ignorar)</label>
+      <div class="field"><label>Sin actividad reciente en más de (días, 0=ignorar)</label>
         <input id="fl-dias" type="number" value="0" min="0"></div>
     </div>
     <div id="filtros-guardados-bar" style="padding:8px 16px 0;display:flex;gap:6px;flex-wrap:wrap"></div>
@@ -731,7 +789,8 @@ function toast(msg, type="ok") {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
-  await Promise.all([loadStats(), loadEmpresas(), loadFilterMeta()]);
+  await Promise.all([loadStats(), loadEmpresas(), loadFilterMeta(),
+                     loadActividadesRecientes()]);
 }
 
 async function loadStats() {
@@ -845,7 +904,7 @@ async function selectEmpresa(id) {
   S.selEmpresa = r.data;
   S.selContacto = null; S.selCotizacion = null;
   renderEmpresaDetail();
-  await Promise.all([loadContactos(), loadCotizaciones()]);
+  await Promise.all([loadContactos(), loadCotizaciones(), loadActividades()]);
   enableDetailBtns(true);
   renderList(); // re-render to show selection
 }
@@ -865,8 +924,9 @@ function renderEmpresaDetail() {
 
 function enableDetailBtns(on) {
   ["btn-edit","btn-hist","btn-valid","btn-del",
-   "btn-add-con","btn-add-cot"].forEach(id => {
-    document.getElementById(id).disabled = !on;
+   "btn-add-con","btn-add-cot","btn-add-act"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !on;
   });
 }
 
@@ -927,6 +987,11 @@ async function delEmpresa() {
   enableDetailBtns(false);
   document.getElementById("con-body").innerHTML = "";
   document.getElementById("cot-body").innerHTML = "";
+  document.getElementById("act-timeline").innerHTML =
+    '<div style="text-align:center;padding:20px;color:var(--muted);font-size:12px">Seleccioná una empresa</div>';
+  const actTxt = document.getElementById("act-texto");
+  if (actTxt) actTxt.value = "";
+  S.actividades = [];
   await Promise.all([loadEmpresas(), loadStats()]);
 }
 
@@ -1222,13 +1287,123 @@ async function doResumirCot() {
   }, 2000);
 }
 
+// ── Actividades ──────────────────────────────────────────────────────────────
+const TIPO_ICONS = {llamada:"📞", email:"✉️", reunion:"🤝", nota:"📝"};
+const TIPO_CSS   = {llamada:"tl-llamada", email:"tl-email",
+                    reunion:"tl-reunion", nota:"tl-nota"};
+
+function iconActividad(tipo) {
+  return TIPO_ICONS[tipo] || "📝";
+}
+
+async function loadActividades() {
+  const box = document.getElementById("act-timeline");
+  if (!S.selEmpresa) {
+    S.actividades = [];
+    box.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);font-size:12px">Seleccioná una empresa</div>';
+    return;
+  }
+  const r = await GET(`/api/empresas/${S.selEmpresa.id}/actividades`);
+  if (!r.ok) { toast(r.error||"Error cargando actividades","err"); return; }
+  S.actividades = r.data || [];
+  renderActividades();
+}
+
+function renderActividades() {
+  const box   = document.getElementById("act-timeline");
+  const items = S.actividades || [];
+  if (!items.length) {
+    box.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted);font-size:12px">Sin actividad registrada</div>';
+    return;
+  }
+  box.innerHTML = items.map(a => {
+    const tipo  = a.tipo || "nota";
+    const css   = TIPO_CSS[tipo] || "tl-nota";
+    const fecha = (a.fecha||"").slice(0,16).replace("T"," ");
+    return `<div class="tl-item" id="tl-${a.id}">
+      <div class="tl-icon ${css}">${iconActividad(tipo)}</div>
+      <div class="tl-body">
+        <div class="tl-meta">
+          <span class="tl-tipo">${esc(tipo)}</span>
+          <span>${esc(fecha)}</span>
+          ${a.usuario && a.usuario !== "usuario" ? `<span>${esc(a.usuario)}</span>` : ""}
+          <div class="tl-actions">
+            <button class="btn btn-ghost" style="padding:1px 6px;font-size:10px"
+              onclick="editarActividad(${a.id})">✏</button>
+            <button class="btn btn-danger" style="padding:1px 6px;font-size:10px"
+              onclick="eliminarActividad(${a.id})">✕</button>
+          </div>
+        </div>
+        <div class="tl-texto">${esc(a.texto||"")}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function agregarActividad() {
+  if (!S.selEmpresa) return;
+  const textoEl = document.getElementById("act-texto");
+  const texto   = textoEl.value.trim();
+  if (!texto) { toast("Escribí una actividad","err"); return; }
+  const tipo = document.getElementById("act-tipo").value || "nota";
+  const r = await POST(`/api/empresas/${S.selEmpresa.id}/actividades`,
+                       {tipo, texto, usuario:"usuario"});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  textoEl.value = "";
+  await Promise.all([loadActividades(), loadActividadesRecientes()]);
+  toast("Actividad guardada");
+}
+
+async function editarActividad(aid) {
+  const act = (S.actividades||[]).find(a => a.id === aid);
+  if (!act) return;
+  const texto = prompt("Editar actividad:", act.texto||"");
+  if (texto === null) return;
+  const limpio = texto.trim();
+  if (!limpio) { toast("El texto es obligatorio","err"); return; }
+  const r = await PUT(`/api/actividades/${aid}`,
+                      {tipo: act.tipo||"nota", texto: limpio});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  await Promise.all([loadActividades(), loadActividadesRecientes()]);
+  toast("Actividad actualizada");
+}
+
+async function eliminarActividad(aid) {
+  if (!confirm("¿Eliminar esta actividad?")) return;
+  const r = await DEL(`/api/actividades/${aid}`);
+  if (!r.ok) { toast(r.error||"No encontrada","err"); return; }
+  await Promise.all([loadActividades(), loadActividadesRecientes()]);
+  toast("Actividad eliminada");
+}
+
+async function loadActividadesRecientes() {
+  const box = document.getElementById("act-recientes");
+  const r   = await GET("/api/actividades/recientes?dias=30&limit=30");
+  if (!r.ok) {
+    box.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:4px 8px">Sin actividad</div>';
+    return;
+  }
+  const rows = r.data || [];
+  box.innerHTML = rows.length
+    ? rows.map(a => `
+        <div class="act-rec-item"
+             onclick="selectEmpresa(${a.empresa_id});switchTab('actividad')"
+             title="${esc(a.texto||"")}">
+          <div class="act-rec-empresa">${esc(a.empresa_nombre||"")}</div>
+          <div>${iconActividad(a.tipo)} ${esc((a.texto||"").slice(0,60))}</div>
+        </div>`).join("")
+    : '<div style="font-size:10px;color:var(--muted);padding:4px 8px">Sin actividad reciente</div>';
+}
+
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function switchTab(t) {
   document.querySelectorAll(".tab").forEach((el,i) =>
-    el.classList.toggle("active", ["empresa","cotizaciones"][i] === t));
+    el.classList.toggle("active",
+      ["empresa","cotizaciones","actividad"][i] === t));
   document.querySelectorAll(".tab-panel").forEach(el =>
     el.classList.remove("active"));
   document.getElementById("tab-"+t).classList.add("active");
+  if (t === "actividad" && S.selEmpresa) loadActividades();
 }
 
 // ── Historial ─────────────────────────────────────────────────────────────────
@@ -1646,7 +1821,7 @@ function applyFilters() {
   if (tag)   f.tag   = tag;
   if (cot)   f.cotizaciones_cond = cot;
   if (con)   f.contactos_cond    = con;
-  if (dias)  f.dias_cotizacion   = dias;
+  if (dias)  f.dias_actividad    = dias;
   S.filters = f;
   const n = Object.keys(f).length;
   document.getElementById("filter-badge").textContent = n ? `● ${n}` : "";

@@ -159,6 +159,8 @@ def get_empresas():
         if v: filtros[k] = v
     dias = to_int(request.args.get("dias_cotizacion"), 0, lo=0)
     if dias: filtros["dias_cotizacion"] = dias
+    dias_act = to_int(request.args.get("dias_actividad"), 0, lo=0)
+    if dias_act: filtros["dias_actividad"] = dias_act
 
     rows   = db.get_filtered_empresas(q, filtros)
     result = []
@@ -298,6 +300,63 @@ def get_cotizacion_archivo(cid):
     if not ruta or not os.path.isfile(ruta):
         return err("Archivo no disponible en este servidor", 404)
     return send_file(ruta, as_attachment=False)
+
+
+# ── Actividades ───────────────────────────────────────────────────────────────
+_ACT_TIPOS = {"nota","llamada","email","reunion"}
+
+def _clean_tipo_act(v):
+    v = clean(v or "").lower()
+    return v if v in _ACT_TIPOS else "nota"
+
+
+@app.route("/api/empresas/<int:eid>/actividades")
+def get_actividades(eid):
+    if not db.obtener_empresa_por_id(eid):
+        return err("Empresa no encontrada", 404)
+    limit  = to_int(request.args.get("limit",  200), 200, lo=1, hi=500)
+    offset = to_int(request.args.get("offset",   0),   0, lo=0)
+    return ok(rows_to_list(db.get_actividades_empresa(eid,
+                                                      limit=limit,
+                                                      offset=offset)))
+
+
+@app.route("/api/empresas/<int:eid>/actividades", methods=["POST"])
+def post_actividad(eid):
+    if not db.obtener_empresa_por_id(eid):
+        return err("Empresa no encontrada", 404)
+    b     = request.json or {}
+    texto = clean(b.get("texto"))
+    if not texto: return err("El texto es obligatorio")
+    usuario = (clean(b.get("usuario","")) or "usuario")[:80]
+    ok2 = db.agregar_actividad(eid, _clean_tipo_act(b.get("tipo")),
+                               texto, usuario)
+    if not ok2: return err("No se pudo guardar")
+    return ok(), 201
+
+
+@app.route("/api/actividades/<int:aid>", methods=["PUT"])
+def put_actividad(aid):
+    b     = request.json or {}
+    texto = clean(b.get("texto"))
+    if not texto: return err("El texto es obligatorio")
+    ok2 = db.editar_actividad(aid, _clean_tipo_act(b.get("tipo")), texto)
+    if not ok2: return err("Actividad no encontrada", 404)
+    return ok()
+
+
+@app.route("/api/actividades/<int:aid>", methods=["DELETE"])
+def delete_actividad(aid):
+    ok2 = db.eliminar_actividad(aid)
+    if not ok2: return err("Actividad no encontrada", 404)
+    return ok()
+
+
+@app.route("/api/actividades/recientes")
+def get_actividades_recientes():
+    dias  = to_int(request.args.get("dias",  7),  7, lo=1, hi=365)
+    limit = to_int(request.args.get("limit", 50), 50, lo=1, hi=200)
+    return ok(rows_to_list(db.get_actividades_recientes(dias, limit)))
 
 # ── Historial ─────────────────────────────────────────────────────────────────
 @app.route("/api/empresas/<int:eid>/historial")
