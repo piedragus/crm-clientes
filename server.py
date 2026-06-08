@@ -1090,6 +1090,185 @@ def get_dashboard():
         "resumen":              resumen,
     })
 
+
+# ── Importador por subcarpetas ────────────────────────────────────────────────
+@app.route("/api/importar/subcarpetas/listar", methods=["POST"])
+def listar_subcarpetas():
+    """
+    Lista las subcarpetas de primer nivel con conteo de PDFs nuevos.
+    No procesa archivos, solo cuenta.
+    """
+    b    = request.json or {}
+    path = clean(b.get("path",""))
+    if not path or not os.path.isdir(path):
+        return err(f"Carpeta no encontrada: {path!r}")
+
+    existing = {r["ruta_archivo"] for r in
+                db.fetchall("SELECT ruta_archivo FROM cotizaciones")
+                if r.get("ruta_archivo")}
+
+    EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
+    result = []
+
+    try:
+        entries = sorted(os.scandir(path), key=lambda e: e.name)
+    except PermissionError as exc:
+        return err(str(exc))
+
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        total = ya = 0
+        for root, _, files in os.walk(entry.path):
+            for fname in files:
+                if os.path.splitext(fname)[1].lower() in EXTS:
+                    total += 1
+                    if os.path.join(root, fname) in existing:
+                        ya += 1
+        if total > 0:
+            result.append({
+                "nombre":        entry.name,
+                "path":          entry.path,
+                "total_pdf":     total,
+                "ya_importados": ya,
+                "a_importar":    total - ya,
+            })
+
+    # Also count loose files in root
+    loose_total = loose_ya = 0
+    for fname in os.listdir(path):
+        fpath = os.path.join(path, fname)
+        if os.path.isfile(fpath) and                 os.path.splitext(fname)[1].lower() in EXTS:
+            loose_total += 1
+            if fpath in existing:
+                loose_ya += 1
+    if loose_total > 0:
+        result.insert(0, {
+            "nombre":        "(archivos sueltos)",
+            "path":          path,
+            "total_pdf":     loose_total,
+            "ya_importados": loose_ya,
+            "a_importar":    loose_total - loose_ya,
+        })
+
+    return ok(result, total_subcarpetas=len(result))
+
+
+@app.route("/api/importar/subcarpetas/importar", methods=["POST"])
+def importar_subcarpetas():
+    """
+    Importa PDFs de las subcarpetas seleccionadas de a 'lote' archivos.
+    Detecta empresa y país. Crea empresas si no existen.
+    Archivos con nombre raro → sin_empresa:True, no se saltean.
+    """
+    b           = request.json or {}
+    path        = clean(b.get("path",""))
+    subcarpetas = b.get("subcarpetas", [])  # list of paths
+    lote        = max(1, min(to_int(b.get("lote", 500), 500), 2000))
+    offset      = max(0, to_int(b.get("offset", 0), 0))
+
+    if not path or not os.path.isdir(path):
+        return err(f"Carpeta no encontrada: {path!r}")
+    if not subcarpetas:
+        return err("Seleccioná al menos una subcarpeta")
+
+    EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
+
+    existing_rutas = {r["ruta_archivo"] for r in
+                      db.fetchall("SELECT ruta_archivo FROM cotizaciones")
+                      if r.get("ruta_archivo")}
+    emp_by_nombre  = {e["nombre"].lower(): e["id"]
+                      for e in db.fetchall("SELECT id, nombre FROM empresas")}
+
+    crear_backup_seguro("antes_importar_subcarpetas")
+
+    # Collect all files from selected subcarpetas
+    all_files = []
+    for sub_path in subcarpetas:
+        if not os.path.isdir(sub_path):
+            continue
+        for root, _, files in os.walk(sub_path):
+            rel_root     = os.path.relpath(root, path)
+            folder_chain = ([] if rel_root == "."
+                            else rel_root.replace("\\", "/").split("/"))
+            for fname in sorted(files):
+                if os.path.splitext(fname)[1].lower() not in EXTS:
+                    continue
+                fpath = os.path.join(root, fname)
+                if fpath in existing_rutas:
+                    continue
+                all_files.append((fpath, fname, folder_chain))
+
+    total_pendientes = len(all_files)
+    lote_files       = all_files[offset: offset + lote]
+
+    ok_count = err_count = empresas_creadas = sin_empresa = 0
+
+    for fpath, fname, folder_chain in lote_files:
+        stem   = os.path.splitext(fname)[0]
+        nombre = _get_client_name(folder_chain, stem)
+
+        # Validate nombre
+        import re as _re
+        nombre_valido = (nombre and len(nombre.strip()) >= 2
+                         and not _re.match(r'^\d+$', nombre.strip()))
+
+        if not nombre_valido:
+            # Mark as sin_empresa but still import with placeholder
+            sin_empresa += 1
+            nombre = f"_sin_empresa_{stem[:30]}"
+
+        nombre  = nombre.strip()
+        pais    = _detect_pais(folder_chain)
+
+        eid = emp_by_nombre.get(nombre.lower())
+        if not eid:
+            ok2 = db.agregar_empresa(nombre, "", "", "", "", pais, "")
+            if ok2:
+                row = db.fetchone(
+                    "SELECT id FROM empresas WHERE nombre=?", (nombre,))
+                if row:
+                    eid = row["id"]
+                    emp_by_nombre[nombre.lower()] = eid
+                    empresas_creadas += 1
+
+        if not eid:
+            err_count += 1
+            continue
+
+        try:
+            mtime = datetime.fromtimestamp(
+                os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            mtime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        ok2 = db.agregar_cotizacion_con_ruta(eid, fname, 0.0, mtime, fpath)
+        if ok2:
+            ok_count += 1
+            existing_rutas.add(fpath)
+            row = db.fetchone(
+                "SELECT id FROM cotizaciones WHERE empresa_id=? "
+                "AND ruta_archivo=? ORDER BY id DESC LIMIT 1",
+                (eid, fpath))
+            if row:
+                lanzar_resumen(row["id"])
+        else:
+            err_count += 1
+
+    completado = (offset + lote) >= total_pendientes
+
+    return ok({
+        "importados":       ok_count,
+        "empresas_creadas": empresas_creadas,
+        "sin_empresa":      sin_empresa,
+        "errores":          err_count,
+        "offset":           offset,
+        "lote":             lote,
+        "total_pendientes": total_pendientes,
+        "completado":       completado,
+        "siguiente_offset": offset + lote if not completado else None,
+    })
+
 # ── Exportar ──────────────────────────────────────────────────────────────────
 @app.route("/api/exportar")
 def exportar():
@@ -1143,6 +1322,23 @@ GENERIC_FOLDERS = {
 }
 
 IMPORT_EXTS = {'.pdf','.docx','.xlsx','.doc','.xls','.pptx','.txt'}
+
+PAISES_CONOCIDOS = {
+    "argentina":"Argentina","chile":"Chile","bolivia":"Bolivia",
+    "colombia":"Colombia","peru":"Perú","uruguay":"Uruguay",
+    "nicaragua":"Nicaragua","paraguay":"Paraguay","ecuador":"Ecuador",
+    "brasil":"Brasil","mexico":"México","estados unidos":"Estados Unidos",
+    "usa":"Estados Unidos","eeuu":"Estados Unidos",
+}
+
+def _detect_pais(folder_chain: list) -> str:
+    """Detecta país desde la cadena de carpetas."""
+    for folder in folder_chain:
+        p = folder.lower().strip()
+        if p in PAISES_CONOCIDOS:
+            return PAISES_CONOCIDOS[p]
+    return ""
+
 
 def _extract_client_from_stem(stem):
     """'ALBANESI02' → 'ALBANESI', 'Alejandro Garaggiola01' → 'Alejandro Garaggiola'"""

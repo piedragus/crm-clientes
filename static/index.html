@@ -893,6 +893,44 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
                 style="padding:3px 10px;font-size:11px">Siguiente ▶</button>
       </div>
     </div>
+    <!-- Subcarpetas section -->
+    <div id="subcarpetas-section" style="display:none;border-top:1px solid var(--border);padding-top:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);
+                  text-transform:uppercase;margin-bottom:6px">
+        Importar por subcarpetas
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button class="btn btn-ghost" onclick="listarSubcarpetas()" id="btn-listar-sub">
+          📂 Listar subcarpetas
+        </button>
+        <button class="btn btn-primary" onclick="importarSubcarpetasSeleccionadas()"
+                id="btn-imp-sub" disabled>
+          🚀 Importar seleccionadas
+        </button>
+      </div>
+      <div id="sub-list" style="max-height:200px;overflow-y:auto;
+           border:1px solid var(--border);border-radius:4px;display:none">
+        <table class="sub-table" style="width:100%;font-size:11px">
+          <thead><tr>
+            <th><input type="checkbox" id="sub-chk-all" onchange="toggleSubAll(this)"> Subcarpeta</th>
+            <th style="text-align:right">PDFs nuevos</th>
+            <th style="text-align:right">Ya importados</th>
+          </tr></thead>
+          <tbody id="sub-tbody"></tbody>
+        </table>
+      </div>
+      <div id="sub-progress" style="display:none;margin-top:8px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)">
+          <span id="sub-prog-label">Importando…</span>
+          <span id="sub-prog-count"></span>
+        </div>
+        <div style="background:var(--border);border-radius:99px;height:6px;margin-top:4px;overflow:hidden">
+          <div id="sub-prog-bar" style="height:100%;background:var(--accent);
+               border-radius:99px;width:0%;transition:width .3s"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="modal-footer">
       <button class="btn btn-ok" id="btn-imp-auto" onclick="importarAuto()" disabled>✓ Importar automáticos</button>
       <button class="btn btn-primary" id="btn-imp-sel" onclick="importarSeleccionados()" disabled>Importar seleccionados</button>
@@ -2168,6 +2206,101 @@ async function escanear() {
 async function escanearPagina(dir) {
   SCAN.offset = Math.max(0, SCAN.offset + dir * SCAN.limit);
   await _doEscanear();
+}
+
+async function listarSubcarpetas() {
+  const path = document.getElementById("imp-path").value.trim();
+  if (!path) { toast("Ingresá la ruta primero","err"); return; }
+  const btn = document.getElementById("btn-listar-sub");
+  btn.disabled = true; btn.textContent = "Listando…";
+  showProgress("Listando subcarpetas…", path);
+  try {
+    const r = await POST("/api/importar/subcarpetas/listar", {path});
+    hideProgress();
+    btn.disabled = false; btn.textContent = "📂 Listar subcarpetas";
+    if (!r.ok) { toast(r.error||"Error","err"); return; }
+    const subs = r.data || [];
+    document.getElementById("sub-list").style.display = subs.length ? "" : "none";
+    document.getElementById("subcarpetas-section").style.display = "";
+    document.getElementById("btn-imp-sub").disabled = false;
+    document.getElementById("sub-tbody").innerHTML = subs.map((s,i) => `
+      <tr>
+        <td style="padding:4px 8px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" class="sub-chk" data-path="${esc(s.path)}"
+                   ${s.a_importar > 0 ? "checked" : "disabled"}>
+            <span>${esc(s.nombre)}</span>
+          </label>
+        </td>
+        <td style="padding:4px 8px;text-align:right;font-weight:700;
+            color:${s.a_importar > 0 ? 'var(--ok)' : 'var(--muted)'}">
+          ${s.a_importar}
+        </td>
+        <td style="padding:4px 8px;text-align:right;color:var(--muted)">
+          ${s.ya_importados}
+        </td>
+      </tr>`).join("")
+      || '<tr><td colspan="3" style="text-align:center;padding:12px;color:var(--muted)">Sin subcarpetas</td></tr>';
+    toast(`${subs.length} subcarpeta(s) encontradas`);
+  } catch(e) {
+    hideProgress();
+    btn.disabled = false; btn.textContent = "📂 Listar subcarpetas";
+    toast("Error","err");
+  }
+}
+
+function toggleSubAll(chk) {
+  document.querySelectorAll(".sub-chk:not(:disabled)")
+    .forEach(c => c.checked = chk.checked);
+}
+
+async function importarSubcarpetasSeleccionadas() {
+  const path = document.getElementById("imp-path").value.trim();
+  const selPaths = [...document.querySelectorAll(".sub-chk:checked")]
+    .map(c => c.dataset.path);
+  if (!selPaths.length) { toast("Seleccioná al menos una subcarpeta","err"); return; }
+
+  document.getElementById("btn-imp-sub").disabled = true;
+  document.getElementById("sub-progress").style.display = "";
+
+  let offset = 0;
+  const lote = 500;
+  let totalImportados = 0, totalEmpresas = 0, totalSinEmp = 0;
+
+  while (true) {
+    document.getElementById("sub-prog-label").textContent =
+      `Importando… offset ${offset}`;
+    document.getElementById("sub-prog-count").textContent =
+      `${totalImportados} importados`;
+
+    const r = await POST("/api/importar/subcarpetas/importar", {
+      path, subcarpetas: selPaths, lote, offset
+    });
+    if (!r.ok) { toast(r.error||"Error","err"); break; }
+
+    const d = r.data;
+    totalImportados += d.importados;
+    totalEmpresas   += d.empresas_creadas;
+    totalSinEmp     += d.sin_empresa;
+
+    // Update progress bar
+    const pct = d.total_pendientes > 0
+      ? Math.round((offset + lote) / d.total_pendientes * 100)
+      : 100;
+    document.getElementById("sub-prog-bar").style.width = Math.min(pct,100) + "%";
+    document.getElementById("sub-prog-count").textContent =
+      `${totalImportados} / ${d.total_pendientes}`;
+
+    if (d.completado) break;
+    offset = d.siguiente_offset;
+  }
+
+  document.getElementById("sub-prog-bar").style.width = "100%";
+  document.getElementById("sub-prog-label").textContent = "✓ Completado";
+  document.getElementById("btn-imp-sub").disabled = false;
+
+  toast(`✓ ${totalImportados} importados | ${totalEmpresas} empresas creadas${totalSinEmp ? ` | ${totalSinEmp} sin empresa` : ""}`);
+  await Promise.all([loadEmpresas(), loadStats()]);
 }
 
 async function _doEscanear() {

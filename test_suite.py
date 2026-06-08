@@ -5128,6 +5128,131 @@ class TestDashboard(unittest.TestCase):
         r = c2.get("/api/dashboard")
         self.assertIn(r.status_code, (200,))
 
+
+
+# =====================================================================
+# 57. IMPORTADOR POR SUBCARPETAS
+# =====================================================================
+class TestImportadorSubcarpetas(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db     = _db
+        self.tmpdir = tempfile.mkdtemp()
+        # Create folder structure
+        # Comercial/ARGENTINA/ALBANESI01.pdf
+        # Equipos/CHILE/TUSAM/cotiz01.pdf
+        # raiz_suelto.pdf
+        self._mk("Comercial", "ARGENTINA", "ALBANESI01.pdf")
+        self._mk("Comercial", "ARGENTINA", "ALBANESI02.pdf")
+        self._mk("Equipos",   "CHILE",     "TUSAM", "cotiz01.pdf")
+        self._mk_file("raiz_suelto.pdf")
+
+    def _mk(self, *parts):
+        d = os.path.join(self.tmpdir, *parts[:-1])
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, parts[-1])
+        with open(p, 'wb') as f_: f_.write(b'%PDF-1.4 ' + parts[-1].encode())
+
+    def _mk_file(self, fname):
+        p = os.path.join(self.tmpdir, fname)
+        with open(p, 'wb') as f_: f_.write(b'%PDF-1.4 ' + fname.encode())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in ("ALBANESI","TUSAM","_sin_empresa_raiz_suelto"):
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row: self.db.eliminar_empresa(row["id"])
+
+    def test_listar_subcarpetas_200(self):
+        r = self.client.post("/api/importar/subcarpetas/listar",
+                             json={"path": self.tmpdir})
+        self.assertEqual(r.status_code, 200)
+        subs = r.get_json()["data"]
+        nombres = [s["nombre"] for s in subs]
+        self.assertIn("Comercial", nombres)
+        self.assertIn("Equipos",   nombres)
+
+    def test_listar_incluye_archivos_sueltos(self):
+        r = self.client.post("/api/importar/subcarpetas/listar",
+                             json={"path": self.tmpdir})
+        subs = r.get_json()["data"]
+        nombres = [s["nombre"] for s in subs]
+        self.assertIn("(archivos sueltos)", nombres)
+
+    def test_listar_conteo_correcto(self):
+        r = self.client.post("/api/importar/subcarpetas/listar",
+                             json={"path": self.tmpdir})
+        subs = {s["nombre"]: s for s in r.get_json()["data"]}
+        self.assertEqual(subs["Comercial"]["total_pdf"], 2)
+        self.assertEqual(subs["Equipos"]["total_pdf"],   1)
+
+    def test_listar_carpeta_inexistente_400(self):
+        r = self.client.post("/api/importar/subcarpetas/listar",
+                             json={"path": "/ruta/que/no/existe"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_importar_subcarpetas_crea_empresas(self):
+        sub_path = os.path.join(self.tmpdir, "Comercial")
+        r = self.client.post("/api/importar/subcarpetas/importar",
+                             json={"path": self.tmpdir,
+                                   "subcarpetas": [sub_path], "lote": 100})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.assertGreater(d["importados"], 0)
+        self.assertGreater(d["empresas_creadas"], 0)
+
+    def test_importar_detecta_pais(self):
+        """Empresa creada desde Comercial/ARGENTINA debe tener pais=Argentina."""
+        sub_path = os.path.join(self.tmpdir, "Comercial")
+        self.client.post("/api/importar/subcarpetas/importar",
+                         json={"path": self.tmpdir,
+                               "subcarpetas": [sub_path], "lote": 100})
+        row = self.db.fetchone(
+            "SELECT pais FROM empresas WHERE nombre='ALBANESI'")
+        if row:
+            self.assertEqual(row["pais"], "Argentina",
+                "Empresa de ARGENTINA debe tener pais=Argentina")
+
+    def test_importar_devuelve_completado(self):
+        sub_path = os.path.join(self.tmpdir, "Equipos")
+        r = self.client.post("/api/importar/subcarpetas/importar",
+                             json={"path": self.tmpdir,
+                                   "subcarpetas": [sub_path], "lote": 500})
+        d = r.get_json()["data"]
+        self.assertIn("completado", d)
+        self.assertTrue(d["completado"],
+            "Con lote >= archivos debe marcar completado=True")
+
+    def test_importar_paginacion_lote_1(self):
+        """Con lote=1 devuelve siguiente_offset y completado=False si hay más."""
+        sub_path = os.path.join(self.tmpdir, "Comercial")
+        r = self.client.post("/api/importar/subcarpetas/importar",
+                             json={"path": self.tmpdir,
+                                   "subcarpetas": [sub_path],
+                                   "lote": 1, "offset": 0})
+        d = r.get_json()["data"]
+        if d["total_pendientes"] > 1:
+            self.assertFalse(d["completado"])
+            self.assertEqual(d["siguiente_offset"], 1)
+
+    def test_importar_sin_subcarpetas_400(self):
+        r = self.client.post("/api/importar/subcarpetas/importar",
+                             json={"path": self.tmpdir, "subcarpetas": []})
+        self.assertEqual(r.status_code, 400)
+
+    def test_detect_pais_helper(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        import server as srv
+        self.assertEqual(srv._detect_pais(["Comercial","ARGENTINA","ACME"]),
+                         "Argentina")
+        self.assertEqual(srv._detect_pais(["Equipos","CHILE","TUSAM"]),
+                         "Chile")
+        self.assertEqual(srv._detect_pais(["Equipos","CARPETA_SIN_PAIS"]),
+                         "")
+
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
         from server import app, db as _db
