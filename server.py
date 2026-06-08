@@ -160,7 +160,7 @@ def stats():
 # ── Empresas ──────────────────────────────────────────────────────────────────
 @app.route("/api/empresas")
 def get_empresas():
-    q = request.args.get("q","")
+    q       = request.args.get("q", "")
     filtros = {}
     for k in ("pais","rubro","tag","cotizaciones_cond","contactos_cond"):
         v = request.args.get(k)
@@ -170,15 +170,61 @@ def get_empresas():
     dias_act = to_int(request.args.get("dias_actividad"), 0, lo=0)
     if dias_act: filtros["dias_actividad"] = dias_act
 
-    rows   = db.get_filtered_empresas(q, filtros)
+    page      = max(0, to_int(request.args.get("page", 0), 0))
+    page_size = max(10, min(to_int(request.args.get("page_size", 250), 250), 500))
+
+    all_rows  = db.get_filtered_empresas(q, filtros)
+    total     = len(all_rows)
+    pages     = max(1, -(-total // page_size))
+    rows      = all_rows[page * page_size : (page + 1) * page_size]
+
+    if not rows:
+        return ok([], total=total, page=page, pages=pages)
+
+    # Bulk fetch stats — 2 queries instead of N*3
+    ids           = [r["id"] for r in rows]
+    placeholders  = ",".join("?" * len(ids))
+
+    cot_stats = {r["empresa_id"]: r for r in db.fetchall(f"""
+        SELECT empresa_id,
+               COUNT(*)   ncot,
+               MAX(fecha) ultima_fecha,
+               MAX(CASE WHEN fecha = (SELECT MAX(f2.fecha)
+                                      FROM cotizaciones f2
+                                      WHERE f2.empresa_id = cotizaciones.empresa_id)
+                        THEN monto  END) ultimo_monto,
+               MAX(CASE WHEN fecha = (SELECT MAX(f2.fecha)
+                                      FROM cotizaciones f2
+                                      WHERE f2.empresa_id = cotizaciones.empresa_id)
+                        THEN moneda END) ultima_moneda
+        FROM cotizaciones
+        WHERE empresa_id IN ({placeholders})
+        GROUP BY empresa_id
+    """, tuple(ids))}
+
+    tags_map = {}
+    for r in db.fetchall(f"""
+        SELECT et.empresa_id, GROUP_CONCAT(t.tag, ',') tags
+        FROM empresa_tags et
+        JOIN tags t ON et.tag_id = t.id
+        WHERE et.empresa_id IN ({placeholders})
+        GROUP BY et.empresa_id
+    """, tuple(ids)):
+        tags_map[r["empresa_id"]] = [t for t in (r["tags"] or "").split(",") if t]
+
     result = []
     for r in rows:
-        d = dict(r)
-        d["ultima"] = formatear_fecha(db.get_ultima_cotizacion(r["id"]) or "")
-        d["ncot"]   = db.count_by_empresa("cotizaciones", r["id"])
-        d["tags"]   = db.get_tags_de_empresa(r["id"])
+        d    = dict(r)
+        eid  = r["id"]
+        stat = cot_stats.get(eid)
+        d["ncot"]          = stat["ncot"]           if stat else 0
+        d["ultima"]        = formatear_fecha(stat["ultima_fecha"] or "") if stat else ""
+        d["ultimo_monto"]  = float(stat["ultimo_monto"]  or 0) if stat else 0
+        d["ultima_moneda"] = (stat["ultima_moneda"] or "")     if stat else ""
+        d["tags"]          = tags_map.get(eid, [])
         result.append(d)
-    return ok(result)
+
+    return ok(result, total=total, page=page, pages=pages)
 
 @app.route("/api/empresas/<int:eid>")
 def get_empresa(eid):
