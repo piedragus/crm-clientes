@@ -999,6 +999,97 @@ def limpiar_renombrar():
     if not ok2: return err("No se pudo renombrar")
     return ok()
 
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+@app.route("/api/dashboard")
+def get_dashboard():
+    meses = max(1, min(to_int(request.args.get("meses", 12), 12), 60))
+    pais  = clean(request.args.get("pais",""))
+
+    from datetime import timedelta
+    desde = (datetime.now() - timedelta(days=meses*30)).strftime("%Y-%m-%d")
+
+    pais_filter = "AND e.pais=?" if pais else ""
+    pais_params = (pais,) if pais else ()
+
+    # Cotizaciones por mes (últimos N meses)
+    cot_mes = db.fetchall(f"""
+        SELECT strftime('%Y-%m', c.fecha) mes,
+               COUNT(*) cantidad,
+               COALESCE(SUM(c.monto),0) monto_total
+        FROM cotizaciones c
+        JOIN empresas e ON c.empresa_id=e.id
+        WHERE c.fecha >= ? {pais_filter}
+        GROUP BY mes ORDER BY mes DESC LIMIT ?
+    """, (desde,) + pais_params + (meses,))
+
+    # Empresas por país
+    emp_pais = db.fetchall(f"""
+        SELECT COALESCE(NULLIF(pais,''),'Sin país') pais, COUNT(*) cantidad
+        FROM empresas GROUP BY pais ORDER BY cantidad DESC LIMIT 15
+    """)
+
+    # Pipeline por etapa
+    pipeline = db.fetchall(f"""
+        SELECT o.etapa, COUNT(*) cantidad,
+               COALESCE(SUM(o.monto_estimado),0) monto_total
+        FROM oportunidades o
+        JOIN empresas e ON o.empresa_id=e.id
+        WHERE 1=1 {pais_filter}
+        GROUP BY o.etapa ORDER BY cantidad DESC
+    """, pais_params)
+
+    # Top 10 empresas por monto cotizado
+    top_emp = db.fetchall(f"""
+        SELECT e.nombre, COUNT(c.id) ncot,
+               COALESCE(SUM(c.monto),0) monto_total
+        FROM empresas e
+        LEFT JOIN cotizaciones c ON c.empresa_id=e.id
+        WHERE 1=1 {pais_filter}
+        GROUP BY e.id ORDER BY monto_total DESC LIMIT 10
+    """, pais_params)
+
+    # Actividad por tipo (últimos 30 días)
+    act_tipo = db.fetchall("""
+        SELECT COALESCE(tipo,'nota') tipo, COUNT(*) cantidad
+        FROM actividades
+        WHERE fecha >= ?
+        GROUP BY tipo ORDER BY cantidad DESC
+    """, ((datetime.now()-timedelta(days=30)).strftime("%Y-%m-%d"),))
+
+    # Resumen general
+    oport_rows = db.fetchall("""
+        SELECT etapa, COUNT(*) n FROM oportunidades GROUP BY etapa
+    """)
+    etapas_abiertas = {"prospecto","contactado","a_visitar","a_cotizar",
+                       "cotizado","en_negociacion","en_proceso","entregada"}
+    abiertas = sum(r["n"] for r in oport_rows
+                   if r["etapa"] in etapas_abiertas)
+    ganadas  = sum(r["n"] for r in oport_rows if r["etapa"] == "ganado")
+
+    monto_total = db.fetchone(
+        f"SELECT COALESCE(SUM(c.monto),0) t FROM cotizaciones c "
+        f"JOIN empresas e ON c.empresa_id=e.id WHERE 1=1 {pais_filter}",
+        pais_params)
+
+    resumen = {
+        "empresas":                 db.count("empresas"),
+        "contactos":                db.count("contactos"),
+        "cotizaciones":             db.count("cotizaciones"),
+        "monto_total_cotizaciones": float(monto_total["t"] if monto_total else 0),
+        "oportunidades_abiertas":   abiertas,
+        "oportunidades_ganadas":    ganadas,
+    }
+
+    return ok({
+        "cotizaciones_por_mes": rows_to_list(cot_mes),
+        "empresas_por_pais":    rows_to_list(emp_pais),
+        "pipeline_por_etapa":   rows_to_list(pipeline),
+        "top_empresas":         rows_to_list(top_emp),
+        "actividad_por_tipo":   rows_to_list(act_tipo),
+        "resumen":              resumen,
+    })
+
 # ── Exportar ──────────────────────────────────────────────────────────────────
 @app.route("/api/exportar")
 def exportar():

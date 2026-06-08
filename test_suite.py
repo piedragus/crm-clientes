@@ -5054,6 +5054,80 @@ class TestLimpiezaUnificacion(unittest.TestCase):
                 self.assertIn("ncot", m)
                 self.assertIn("ncon", m)
 
+
+
+# =====================================================================
+# 56. DASHBOARD
+# =====================================================================
+class TestDashboard(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db     = _db
+        # Seed data
+        self.db.agregar_empresa("DashEmp A","","","","Industria","Argentina","")
+        self.eid_a = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='DashEmp A'")["id"]
+        self.db.agregar_cotizacion(self.eid_a, "Cotiz dash", 50000.0)
+        self.db.crear_oportunidad(self.eid_a, "Oport dash", etapa="prospecto",
+                                  monto_estimado=100000.0)
+        self.db.agregar_actividad(self.eid_a, "llamada", "Test dash")
+
+    def tearDown(self):
+        self.db.eliminar_empresa(self.eid_a)
+
+    def test_dashboard_200(self):
+        r = self.client.get("/api/dashboard")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+
+    def test_dashboard_estructura_completa(self):
+        d = self.client.get("/api/dashboard").get_json()["data"]
+        for key in ("cotizaciones_por_mes","empresas_por_pais",
+                    "pipeline_por_etapa","top_empresas",
+                    "actividad_por_tipo","resumen"):
+            self.assertIn(key, d, f"Falta clave: {key}")
+
+    def test_dashboard_resumen_contiene_campos(self):
+        d = self.client.get("/api/dashboard").get_json()["data"]["resumen"]
+        for key in ("empresas","contactos","cotizaciones",
+                    "monto_total_cotizaciones",
+                    "oportunidades_abiertas","oportunidades_ganadas"):
+            self.assertIn(key, d, f"Falta en resumen: {key}")
+
+    def test_dashboard_meses_param(self):
+        r = self.client.get("/api/dashboard?meses=3")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.assertLessEqual(len(d["cotizaciones_por_mes"]), 3)
+
+    def test_dashboard_pais_filter(self):
+        r = self.client.get("/api/dashboard?pais=Argentina")
+        self.assertEqual(r.status_code, 200)
+
+    def test_dashboard_top_empresas_ordenado(self):
+        d = self.client.get("/api/dashboard").get_json()["data"]
+        montos = [e["monto_total"] for e in d["top_empresas"]]
+        self.assertEqual(montos, sorted(montos, reverse=True),
+            "top_empresas debe estar ordenado por monto desc")
+
+    def test_dashboard_pipeline_tiene_oportunidad(self):
+        d = self.client.get("/api/dashboard").get_json()["data"]
+        etapas = {p["etapa"] for p in d["pipeline_por_etapa"]}
+        self.assertIn("prospecto", etapas)
+
+    def test_dashboard_db_vacia_no_crashea(self):
+        """Con DB vacía el dashboard no debe crashear."""
+        db2 = fresh_db()
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app
+        _app.config['TESTING'] = True
+        c2 = _app.test_client()
+        r = c2.get("/api/dashboard")
+        self.assertIn(r.status_code, (200,))
+
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
         from server import app, db as _db
