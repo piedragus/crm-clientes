@@ -36,8 +36,11 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
          padding:12px 10px 4px;display:flex;align-items:center;gap:6px}
 .nav-sep::after{content:"";flex:1;height:1px;background:var(--sidebar2)}
 .nav-item{padding:8px 12px;color:#94A3B8;cursor:pointer;
-          font-size:12px;transition:background .15s}
+          font-size:12px;transition:background .15s;
+          display:flex;align-items:center;gap:8px}
 .nav-item:hover{background:var(--sidebar2);color:#fff}
+.nav-item-highlight{color:#93C5FD;font-weight:600}
+.nav-item-highlight:hover{background:var(--accent);color:#fff}
 #sidebar-ver{margin-top:auto;padding:8px 12px;font-size:10px;color:var(--muted)}
 
 /* ── Main ── */
@@ -301,25 +304,20 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     <div class="stat-card c-cot"><div class="lbl">Cotizaciones</div><div class="val" id="s-cot">—</div></div>
     <div class="stat-card c-rec"><div class="lbl">Activas 30d</div><div class="val" id="s-rec">—</div></div>
   </div>
-  <div class="nav-sep">Importar</div>
-  <div class="nav-item" onclick="showImportCSV()">CSV de mails</div>
-  <div class="nav-item" onclick="showImportCSV()">CSV de contactos</div>
-  <div class="nav-item" onclick="showImportCarpeta()">Carpeta de cotizaciones</div>
-  <div class="nav-sep">Herramientas</div>
-  <div class="nav-item" onclick="showDupes()">Buscar duplicados</div>
-  <div class="nav-item" onclick="showSearch()">Buscar cotizaciones</div>
-  <div class="nav-item" onclick="showExportMenu()">Exportar…</div>
-  <div class="nav-item" onclick="doBackup()">Hacer backup</div>
-  <div class="nav-item" onclick="doRestore()">Restaurar backup</div>
-  <div class="nav-item" onclick="showDiagnostico()">Diagnóstico de datos</div>
-  <div class="nav-item" onclick="showVerificacion()">Verificar instalación</div>
-  <div class="nav-sep">IA</div>
-  <div class="nav-item" onclick="showEnriquecer()">Enriquecer nombres (Gemini/Grok)</div>
-  <div class="nav-sep" style="cursor:pointer" onclick="showPipeline()">▶ Pipeline</div>
+
+  <div class="nav-sep">Ventas</div>
+  <div class="nav-item nav-item-highlight" onclick="showPipeline()">
+    ⚡ Pipeline
+  </div>
+  <div class="nav-item" onclick="showSearch()">
+    <span style="font-size:12px">🔍</span> Buscar cotizaciones
+  </div>
+
   <div class="nav-sep">Actividad reciente</div>
   <div id="act-recientes">
     <div style="font-size:10px;color:var(--muted);padding:4px 8px">Cargando…</div>
   </div>
+
   <div id="sidebar-ver">v26</div>
 </div>
 
@@ -347,6 +345,9 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <div class="tools-item" onclick="closeToolsMenu();showImportCSV()">📧 CSV de mails / contactos</div>
           <div class="tools-item" onclick="closeToolsMenu();showImportMasivo()">🚀 Importación masiva (miles de archivos)</div>
           <div class="tools-item" onclick="closeToolsMenu();showImportCarpeta()">📁 Carpeta de cotizaciones (manual)</div>
+          <div class="tools-sep"></div>
+          <div class="tools-section">BÚSQUEDA</div>
+          <div class="tools-item" onclick="closeToolsMenu();showDupes()">🔍 Buscar duplicados</div>
           <div class="tools-sep"></div>
           <div class="tools-section">EXPORTAR</div>
           <div class="tools-item" onclick="closeToolsMenu();doExport('xlsx')">📊 Exportar Excel</div>
