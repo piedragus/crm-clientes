@@ -5329,6 +5329,102 @@ class TestImportadorSubcarpetas(unittest.TestCase):
                              comercial.get("total_pdf", 0),
                              "No debe contar archivos no-PDF")
 
+
+
+# =====================================================================
+# 58. GET /API/EMPRESAS — PAGINACIÓN Y BULK STATS
+# =====================================================================
+class TestGetEmpresasPaginacion(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db     = _db
+        # Create 5 test empresas with cotizaciones
+        self.eids = []
+        for i in range(5):
+            self.db.agregar_empresa(f"PagTest {i}","","","","","","")
+            eid = self.db.fetchone(
+                "SELECT id FROM empresas WHERE nombre=?", (f"PagTest {i}",))["id"]
+            self.eids.append(eid)
+        # Add cotizaciones to first empresa
+        self.db.agregar_cotizacion(self.eids[0], "Cot1", 1000.0)
+        self.db.agregar_cotizacion(self.eids[0], "Cot2", 2000.0)
+
+    def tearDown(self):
+        for eid in self.eids:
+            try: self.db.eliminar_empresa(eid)
+            except: pass
+
+    def test_respuesta_incluye_total_pages(self):
+        r = self.client.get("/api/empresas")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertIn("total", data)
+        self.assertIn("pages", data)
+        self.assertIn("page",  data)
+
+    def test_page_negativo_se_clampea_a_0(self):
+        r = self.client.get("/api/empresas?page=-1")
+        self.assertEqual(r.get_json()["page"], 0)
+
+    def test_page_size_0_se_clampea_a_10(self):
+        r = self.client.get("/api/empresas?page_size=0")
+        self.assertEqual(r.status_code, 200)
+
+    def test_sin_params_compatible_con_llamadas_viejas(self):
+        """Sin page/page_size debe seguir funcionando."""
+        r = self.client.get("/api/empresas")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+
+    def test_page_beyond_last_devuelve_lista_vacia(self):
+        r = self.client.get("/api/empresas?page=9999")
+        data = r.get_json()
+        self.assertEqual(data["data"], [])
+        self.assertGreater(data["total"], 0)
+
+    def test_ultimo_monto_moneda_con_misma_fecha(self):
+        """Bug SQL: dos cotizaciones con misma fecha no deben mezclar monto/moneda."""
+        eid = self.eids[1]
+        self.db.ejecutar(
+            "INSERT INTO cotizaciones (empresa_id,descripcion,monto,fecha,moneda) "
+            "VALUES (?,?,?,?,?)", (eid,"A",1000.0,"2024-06-01","USD"))
+        self.db.ejecutar(
+            "INSERT INTO cotizaciones (empresa_id,descripcion,monto,fecha,moneda) "
+            "VALUES (?,?,?,?,?)", (eid,"B",2000.0,"2024-06-01","ARS"))
+        r = self.client.get(f"/api/empresas?q=PagTest 1")
+        emps = r.get_json()["data"]
+        emp = next((e for e in emps if e["id"] == eid), None)
+        if emp:
+            # monto and moneda must come from the SAME row (higher id)
+            if emp["ultimo_monto"] == 2000.0:
+                self.assertEqual(emp["ultima_moneda"], "ARS",
+                    "monto=2000 debe venir con moneda=ARS (misma fila)")
+            elif emp["ultimo_monto"] == 1000.0:
+                self.assertEqual(emp["ultima_moneda"], "USD",
+                    "monto=1000 debe venir con moneda=USD (misma fila)")
+
+    def test_ncot_correcto_con_multiples_cotizaciones(self):
+        r = self.client.get(f"/api/empresas?q=PagTest 0")
+        emps = r.get_json()["data"]
+        emp = next((e for e in emps if e["id"] == self.eids[0]), None)
+        if emp:
+            self.assertEqual(emp["ncot"], 2,
+                "ncot debe ser 2 para empresa con 2 cotizaciones")
+
+    def test_paginacion_page_size_min(self):
+        """page_size se clampea a mínimo 10."""
+        r = self.client.get("/api/empresas?page_size=1&page=0")
+        data = r.get_json()
+        # min page_size is 10, so at most 10 results per page
+        self.assertLessEqual(len(data["data"]), 10)
+        self.assertGreater(data["total"], 0)
+        # With enough empresas, should have pagination
+        if data["total"] > 10:
+            self.assertGreater(data["pages"], 1)
+
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
         from server import app, db as _db

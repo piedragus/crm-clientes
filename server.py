@@ -185,22 +185,36 @@ def get_empresas():
     ids           = [r["id"] for r in rows]
     placeholders  = ",".join("?" * len(ids))
 
-    cot_stats = {r["empresa_id"]: r for r in db.fetchall(f"""
-        SELECT empresa_id,
-               COUNT(*)   ncot,
-               MAX(fecha) ultima_fecha,
-               MAX(CASE WHEN fecha = (SELECT MAX(f2.fecha)
-                                      FROM cotizaciones f2
-                                      WHERE f2.empresa_id = cotizaciones.empresa_id)
-                        THEN monto  END) ultimo_monto,
-               MAX(CASE WHEN fecha = (SELECT MAX(f2.fecha)
-                                      FROM cotizaciones f2
-                                      WHERE f2.empresa_id = cotizaciones.empresa_id)
-                        THEN moneda END) ultima_moneda
+    # Get ncot + ultima_fecha in one query
+    base_stats = {r["empresa_id"]: r for r in db.fetchall(f"""
+        SELECT empresa_id, COUNT(*) ncot, MAX(fecha) ultima_fecha
         FROM cotizaciones
         WHERE empresa_id IN ({placeholders})
         GROUP BY empresa_id
     """, tuple(ids))}
+
+    # Get last cotizacion (monto+moneda) per empresa using ORDER BY fecha DESC, id DESC
+    # This avoids the MAX(CASE WHEN) bug when two rows share the same max fecha
+    last_cot = {}
+    for eid2 in ids:
+        row = db.fetchone(
+            "SELECT monto, moneda FROM cotizaciones "
+            "WHERE empresa_id=? ORDER BY fecha DESC, id DESC LIMIT 1",
+            (eid2,))
+        if row:
+            last_cot[eid2] = row
+
+    # Merge into cot_stats
+    cot_stats = {}
+    for eid2, stat in base_stats.items():
+        lc = last_cot.get(eid2)
+        cot_stats[eid2] = {
+            "empresa_id":   eid2,
+            "ncot":         stat["ncot"],
+            "ultima_fecha": stat["ultima_fecha"],
+            "ultimo_monto": float(lc["monto"] or 0) if lc else 0,
+            "ultima_moneda": (lc["moneda"] or "")   if lc else "",
+        }
 
     tags_map = {}
     for r in db.fetchall(f"""
@@ -219,8 +233,8 @@ def get_empresas():
         stat = cot_stats.get(eid)
         d["ncot"]          = stat["ncot"]           if stat else 0
         d["ultima"]        = formatear_fecha(stat["ultima_fecha"] or "") if stat else ""
-        d["ultimo_monto"]  = float(stat["ultimo_monto"]  or 0) if stat else 0
-        d["ultima_moneda"] = (stat["ultima_moneda"] or "")     if stat else ""
+        d["ultimo_monto"]  = stat["ultimo_monto"]  if stat else 0
+        d["ultima_moneda"] = stat["ultima_moneda"] if stat else ""
         d["tags"]          = tags_map.get(eid, [])
         result.append(d)
 
