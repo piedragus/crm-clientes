@@ -2269,6 +2269,7 @@ async function importarSubcarpetasSeleccionadas() {
   let offset = 0;
   const lote = 500;
   let totalImportados = 0, totalEmpresas = 0, totalSinEmp = 0;
+  let totalSinEmpItems = [];
 
   while (true) {
     document.getElementById("sub-prog-label").textContent =
@@ -2285,6 +2286,9 @@ async function importarSubcarpetasSeleccionadas() {
     totalImportados += d.importados;
     totalEmpresas   += d.empresas_creadas;
     totalSinEmp     += d.sin_empresa;
+    if (Array.isArray(d.sin_empresa_items)) {
+      totalSinEmpItems.push(...d.sin_empresa_items);
+    }
 
     // Update progress bar
     const pct = d.total_pendientes > 0
@@ -2302,18 +2306,30 @@ async function importarSubcarpetasSeleccionadas() {
   document.getElementById("sub-prog-label").textContent = "✓ Completado";
   document.getElementById("btn-imp-sub").disabled = false;
 
-  // Show sin_empresa summary
+  // Show sin_empresa list
   const sinEmpDiv = document.getElementById("sin-empresa-result");
   if (totalSinEmp > 0 && sinEmpDiv) {
+    const shown   = totalSinEmpItems.slice(0, 100);
+    const hayMas  = totalSinEmpItems.length > 100;
     sinEmpDiv.style.display = "";
     sinEmpDiv.innerHTML =
       `<strong style="color:var(--warn)">⚠ ${totalSinEmp} archivo(s) sin empresa detectada</strong>
-       <span style="color:var(--muted);font-size:10px"> — revisalos manualmente o asignales una empresa</span>
-       <div id="sin-emp-list" style="max-height:120px;overflow:auto;margin-top:6px;
-            font-size:10px;color:var(--txt2)"></div>`;
-    // Fetch last batch sin_empresa_items
-    document.getElementById("sin-emp-list").textContent =
-      "Importá de nuevo con lote=1 para ver lista detallada.";
+       <span style="color:var(--muted);font-size:10px"> — no fueron importados</span>
+       <div style="max-height:150px;overflow:auto;margin-top:6px;
+                   border:1px solid var(--border);border-radius:4px;padding:4px 6px">
+         ${shown.map(it => `
+           <div style="padding:2px 0;border-bottom:1px solid var(--border);font-size:10px">
+             <strong>${esc(it.file_name || "")}</strong>
+             <span style="color:var(--muted)">
+               ${esc(it.carpeta || "")}${it.pais_detectado ? " · " + esc(it.pais_detectado) : ""}
+             </span>
+           </div>`).join("")}
+         ${hayMas
+           ? `<div style="color:var(--muted);font-size:10px;padding:4px 0">
+               Mostrando primeros 100 de ${totalSinEmpItems.length}
+              </div>`
+           : ""}
+       </div>`;
   }
 
   toast(`✓ ${totalImportados} importados | ${totalEmpresas} empresas creadas${totalSinEmp ? ` | ${totalSinEmp} sin empresa detectada (saltados)` : ""}`);
