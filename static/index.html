@@ -919,6 +919,9 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <tbody id="sub-tbody"></tbody>
         </table>
       </div>
+      <div id="sin-empresa-result" style="display:none;background:#FEF9C3;
+           border:1px solid var(--warn);border-radius:4px;padding:8px;
+           margin-top:8px;font-size:11px"></div>
       <div id="sub-progress" style="display:none;margin-top:8px">
         <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)">
           <span id="sub-prog-label">Importando…</span>
@@ -2299,7 +2302,21 @@ async function importarSubcarpetasSeleccionadas() {
   document.getElementById("sub-prog-label").textContent = "✓ Completado";
   document.getElementById("btn-imp-sub").disabled = false;
 
-  toast(`✓ ${totalImportados} importados | ${totalEmpresas} empresas creadas${totalSinEmp ? ` | ${totalSinEmp} sin empresa` : ""}`);
+  // Show sin_empresa summary
+  const sinEmpDiv = document.getElementById("sin-empresa-result");
+  if (totalSinEmp > 0 && sinEmpDiv) {
+    sinEmpDiv.style.display = "";
+    sinEmpDiv.innerHTML =
+      `<strong style="color:var(--warn)">⚠ ${totalSinEmp} archivo(s) sin empresa detectada</strong>
+       <span style="color:var(--muted);font-size:10px"> — revisalos manualmente o asignales una empresa</span>
+       <div id="sin-emp-list" style="max-height:120px;overflow:auto;margin-top:6px;
+            font-size:10px;color:var(--txt2)"></div>`;
+    // Fetch last batch sin_empresa_items
+    document.getElementById("sin-emp-list").textContent =
+      "Importá de nuevo con lote=1 para ver lista detallada.";
+  }
+
+  toast(`✓ ${totalImportados} importados | ${totalEmpresas} empresas creadas${totalSinEmp ? ` | ${totalSinEmp} sin empresa detectada (saltados)` : ""}`);
   await Promise.all([loadEmpresas(), loadStats()]);
 }
 

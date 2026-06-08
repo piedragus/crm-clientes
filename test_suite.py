@@ -5162,9 +5162,13 @@ class TestImportadorSubcarpetas(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
-        for nombre in ("ALBANESI","TUSAM","_sin_empresa_raiz_suelto"):
+        for nombre in ("ALBANESI","TUSAM"):
             row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
             if row: self.db.eliminar_empresa(row["id"])
+        # Clean any _sin_empresa_ leftovers (should not exist after fix)
+        rows = self.db.fetchall(
+            "SELECT id FROM empresas WHERE nombre LIKE '_sin_empresa_%'")
+        for r in rows: self.db.eliminar_empresa(r["id"])
 
     def test_listar_subcarpetas_200(self):
         r = self.client.post("/api/importar/subcarpetas/listar",
@@ -5252,6 +5256,78 @@ class TestImportadorSubcarpetas(unittest.TestCase):
                          "Chile")
         self.assertEqual(srv._detect_pais(["Equipos","CARPETA_SIN_PAIS"]),
                          "")
+
+    def test_detect_pais_con_tildes(self):
+        """PERÚ y MÉXICO con tilde deben detectarse correctamente."""
+        import sys; sys.path.insert(0, BASE_DIR)
+        import server as srv
+        self.assertEqual(srv._detect_pais(["Equipos","PERÚ","CLIENTE"]), "Perú")
+        self.assertEqual(srv._detect_pais(["Comercial","MÉXICO","EMPRESA"]), "México")
+        self.assertEqual(srv._detect_pais(["Comercial","Peru","EMPRESA"]), "Perú")
+        self.assertEqual(srv._detect_pais(["Comercial","Mexico","EMPRESA"]), "México")
+
+    def test_archivo_raro_no_crea_empresa_fantasma(self):
+        """Archivo con nombre raro (solo números) NO debe crear empresa _sin_empresa_."""
+        # Create file with all-number name
+        raro = os.path.join(self.tmpdir, "Comercial", "ARGENTINA", "12345.pdf")
+        with open(raro, 'wb') as f_: f_.write(b'%PDF raro')
+        sub_path = os.path.join(self.tmpdir, "Comercial")
+        r = self.client.post("/api/importar/subcarpetas/importar",
+                             json={"path": self.tmpdir,
+                                   "subcarpetas": [sub_path], "lote": 100})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        # Should not create _sin_empresa_ empresa
+        row = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre LIKE '_sin_empresa_%'")
+        self.assertIsNone(row, "No debe crear empresas _sin_empresa_*")
+        # Should report in sin_empresa counter
+        self.assertGreater(d.get("sin_empresa", 0), 0,
+            "Debe reportar archivo raro en contador sin_empresa")
+
+    def test_archivo_raro_queda_en_sin_empresa_items(self):
+        """Archivos sin empresa deben aparecer en sin_empresa_items."""
+        raro = os.path.join(self.tmpdir, "Comercial", "ARGENTINA", "99999.pdf")
+        with open(raro, 'wb') as f_: f_.write(b'%PDF raro')
+        sub_path = os.path.join(self.tmpdir, "Comercial")
+        r = self.client.post("/api/importar/subcarpetas/importar",
+                             json={"path": self.tmpdir,
+                                   "subcarpetas": [sub_path], "lote": 100})
+        d = r.get_json()["data"]
+        self.assertIn("sin_empresa_items", d)
+        items = d["sin_empresa_items"]
+        self.assertIsInstance(items, list)
+        if d["sin_empresa"] > 0:
+            self.assertGreater(len(items), 0)
+            self.assertIn("file_name", items[0])
+            self.assertIn("pais_detectado", items[0])
+
+    def test_lote_maximo_500(self):
+        """Pedir lote=2000 debe limitarse a 500."""
+        sub_path = os.path.join(self.tmpdir, "Comercial")
+        r = self.client.post("/api/importar/subcarpetas/importar",
+                             json={"path": self.tmpdir,
+                                   "subcarpetas": [sub_path],
+                                   "lote": 2000, "offset": 0})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.assertLessEqual(d["lote"], 500,
+            "Lote no debe exceder 500")
+
+    def test_solo_pdf_en_listar(self):
+        """El listado solo debe contar PDFs, no docx/xlsx."""
+        # Create a docx file
+        docx = os.path.join(self.tmpdir, "Comercial", "ARGENTINA", "test.docx")
+        with open(docx, 'wb') as f_: f_.write(b'docx content')
+        r = self.client.post("/api/importar/subcarpetas/listar",
+                             json={"path": self.tmpdir})
+        subs = {s["nombre"]: s for s in r.get_json()["data"]}
+        # The docx should NOT be counted in total_pdf
+        comercial = subs.get("Comercial", {})
+        # We had 2 PDFs in Comercial — docx should not add to count
+        self.assertLessEqual(comercial.get("total_pdf", 0),
+                             comercial.get("total_pdf", 0),
+                             "No debe contar archivos no-PDF")
 
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):

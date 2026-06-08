@@ -1164,7 +1164,7 @@ def importar_subcarpetas():
     b           = request.json or {}
     path        = clean(b.get("path",""))
     subcarpetas = b.get("subcarpetas", [])  # list of paths
-    lote        = max(1, min(to_int(b.get("lote", 500), 500), 2000))
+    lote        = max(1, min(to_int(b.get("lote", 500), 500), 500))
     offset      = max(0, to_int(b.get("offset", 0), 0))
 
     if not path or not os.path.isdir(path):
@@ -1172,7 +1172,7 @@ def importar_subcarpetas():
     if not subcarpetas:
         return err("Seleccioná al menos una subcarpeta")
 
-    EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
+    EXTS = {".pdf"}  # Solo PDF en importador por subcarpetas
 
     existing_rutas = {r["ruta_archivo"] for r in
                       db.fetchall("SELECT ruta_archivo FROM cotizaciones")
@@ -1203,23 +1203,30 @@ def importar_subcarpetas():
     lote_files       = all_files[offset: offset + lote]
 
     ok_count = err_count = empresas_creadas = sin_empresa = 0
+    sin_empresa_items = []
 
     for fpath, fname, folder_chain in lote_files:
         stem   = os.path.splitext(fname)[0]
         nombre = _get_client_name(folder_chain, stem)
 
-        # Validate nombre
         import re as _re
         nombre_valido = (nombre and len(nombre.strip()) >= 2
                          and not _re.match(r'^\d+$', nombre.strip()))
 
-        if not nombre_valido:
-            # Mark as sin_empresa but still import with placeholder
-            sin_empresa += 1
-            nombre = f"_sin_empresa_{stem[:30]}"
+        pais = _detect_pais(folder_chain)
 
-        nombre  = nombre.strip()
-        pais    = _detect_pais(folder_chain)
+        if not nombre_valido:
+            # No crear empresa fantasma — reportar y saltear
+            sin_empresa += 1
+            sin_empresa_items.append({
+                "file_path": fpath,
+                "file_name": fname,
+                "carpeta":   folder_chain[-1] if folder_chain else "",
+                "pais_detectado": pais,
+            })
+            continue
+
+        nombre = nombre.strip()
 
         eid = emp_by_nombre.get(nombre.lower())
         if not eid:
@@ -1258,15 +1265,16 @@ def importar_subcarpetas():
     completado = (offset + lote) >= total_pendientes
 
     return ok({
-        "importados":       ok_count,
-        "empresas_creadas": empresas_creadas,
-        "sin_empresa":      sin_empresa,
-        "errores":          err_count,
-        "offset":           offset,
-        "lote":             lote,
-        "total_pendientes": total_pendientes,
-        "completado":       completado,
-        "siguiente_offset": offset + lote if not completado else None,
+        "importados":         ok_count,
+        "empresas_creadas":   empresas_creadas,
+        "sin_empresa":        sin_empresa,
+        "sin_empresa_items":  sin_empresa_items[:50],  # max 50 en respuesta
+        "errores":            err_count,
+        "offset":             offset,
+        "lote":               lote,
+        "total_pendientes":   total_pendientes,
+        "completado":         completado,
+        "siguiente_offset":   offset + lote if not completado else None,
     })
 
 # ── Exportar ──────────────────────────────────────────────────────────────────
@@ -1323,20 +1331,31 @@ GENERIC_FOLDERS = {
 
 IMPORT_EXTS = {'.pdf','.docx','.xlsx','.doc','.xls','.pptx','.txt'}
 
-PAISES_CONOCIDOS = {
-    "argentina":"Argentina","chile":"Chile","bolivia":"Bolivia",
-    "colombia":"Colombia","peru":"Perú","uruguay":"Uruguay",
-    "nicaragua":"Nicaragua","paraguay":"Paraguay","ecuador":"Ecuador",
-    "brasil":"Brasil","mexico":"México","estados unidos":"Estados Unidos",
-    "usa":"Estados Unidos","eeuu":"Estados Unidos",
+import unicodedata as _ucd
+
+def _norm(s: str) -> str:
+    """Normaliza a minúsculas sin acentos para comparación."""
+    return _ucd.normalize("NFD", str(s or "").lower().strip()).encode(
+        "ascii", "ignore").decode()
+
+PAISES_CONOCIDOS_NORM = {
+    _norm(k): v for k, v in {
+        "Argentina":"Argentina","Chile":"Chile","Bolivia":"Bolivia",
+        "Colombia":"Colombia","Perú":"Perú","Peru":"Perú",
+        "Uruguay":"Uruguay","Nicaragua":"Nicaragua","Paraguay":"Paraguay",
+        "Ecuador":"Ecuador","Brasil":"Brasil","Brazil":"Brasil",
+        "México":"México","Mexico":"México",
+        "Estados Unidos":"Estados Unidos","USA":"Estados Unidos",
+        "EEUU":"Estados Unidos",
+    }.items()
 }
 
 def _detect_pais(folder_chain: list) -> str:
-    """Detecta país desde la cadena de carpetas."""
+    """Detecta país desde la cadena de carpetas (tolerante a tildes y mayúsculas)."""
     for folder in folder_chain:
-        p = folder.lower().strip()
-        if p in PAISES_CONOCIDOS:
-            return PAISES_CONOCIDOS[p]
+        key = _norm(folder)
+        if key in PAISES_CONOCIDOS_NORM:
+            return PAISES_CONOCIDOS_NORM[key]
     return ""
 
 
