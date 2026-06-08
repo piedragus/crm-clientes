@@ -348,6 +348,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <div class="tools-sep"></div>
           <div class="tools-section">BÚSQUEDA</div>
           <div class="tools-item" onclick="closeToolsMenu();showDupes()">🔍 Buscar duplicados</div>
+          <div class="tools-item" onclick="closeToolsMenu();showLimpieza()">🧹 Limpiar y unificar empresas</div>
           <div class="tools-sep"></div>
           <div class="tools-section">EXPORTAR</div>
           <div class="tools-item" onclick="closeToolsMenu();doExport('xlsx')">📊 Exportar Excel</div>
@@ -355,6 +356,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <div class="tools-sep"></div>
           <div class="tools-section">GESTIÓN</div>
           <div class="tools-item" onclick="closeToolsMenu();showDupes()">🔍 Buscar duplicados</div>
+          <div class="tools-item" onclick="closeToolsMenu();showLimpieza()">🧹 Limpiar y unificar empresas</div>
           <div class="tools-item" onclick="closeToolsMenu();doBackup()">💾 Hacer backup</div>
           <div class="tools-item" onclick="closeToolsMenu();doRestore()">↩ Restaurar backup</div>
           <div class="tools-sep"></div>
@@ -708,6 +710,31 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     <div class="modal-footer">
       <button class="btn btn-primary" id="srch-goto" onclick="gotoEmpresaFromSearch()" disabled>Ir a empresa →</button>
       <button class="btn btn-ghost" onclick="closeModal('search-modal')">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- Limpieza y unificación -->
+  <div class="modal" id="limpiar-modal" style="display:none;width:900px;max-width:96vw">
+    <div class="modal-header">
+      <span>🧹 Limpiar y unificar empresas</span>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:16px">
+        <label style="color:#94A3B8;font-size:11px">Similitud mín. %:</label>
+        <input id="limpiar-umbral" type="number" value="85" min="50" max="100"
+               style="width:55px;padding:3px 6px;background:#1E293B;
+                      border:1px solid #334155;color:#fff;border-radius:4px;font-size:12px">
+        <button class="btn btn-ghost" onclick="loadLimpieza()" style="padding:4px 10px">Analizar</button>
+      </div>
+      <button class="modal-close" onclick="closeModal('limpiar-modal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:0">
+      <div id="limpiar-status" style="padding:10px 16px;font-size:12px;color:var(--muted)">
+        Hacé click en Analizar para encontrar empresas similares.
+      </div>
+      <div style="max-height:480px;overflow:auto" id="limpiar-groups"></div>
+    </div>
+    <div class="modal-footer">
+      <span id="limpiar-count" style="color:var(--muted);font-size:11px;margin-right:auto"></span>
+      <button class="btn btn-ghost" onclick="closeModal('limpiar-modal')">Cerrar</button>
     </div>
   </div>
 
@@ -2399,6 +2426,103 @@ async function showVerificacion() {
   flat.dependencias = Object.entries(r.data.dependencias || {}).map(([k,v]) => `${k}: ${v?'OK':'FALTA'}`).join(' | ');
   flat.diagnostico = JSON.stringify(r.data.diagnostico || {});
   document.getElementById('diag-body').innerHTML = renderKeyValueTable(flat);
+}
+
+// ── Limpieza y unificación ────────────────────────────────────────────────────
+async function showLimpieza() {
+  document.getElementById("limpiar-groups").innerHTML = "";
+  document.getElementById("limpiar-status").textContent = "Hacé click en Analizar para encontrar empresas similares.";
+  document.getElementById("limpiar-count").textContent = "";
+  openModal("limpiar-modal");
+}
+
+async function loadLimpieza() {
+  const umbral = document.getElementById("limpiar-umbral").value || 85;
+  document.getElementById("limpiar-status").textContent = "Analizando…";
+  document.getElementById("limpiar-groups").innerHTML =
+    '<div style="text-align:center;padding:20px"><div class="spinner"></div></div>';
+
+  const r = await GET(`/api/limpiar/preview?umbral=${umbral}`);
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+
+  const groups = r.data || [];
+  document.getElementById("limpiar-count").textContent =
+    `${groups.length} grupo(s) detectado(s)`;
+  document.getElementById("limpiar-status").textContent = "";
+
+  if (!groups.length) {
+    document.getElementById("limpiar-groups").innerHTML =
+      '<div style="text-align:center;padding:30px;color:var(--muted)">Sin duplicados con ese umbral ✓</div>';
+    return;
+  }
+
+  document.getElementById("limpiar-groups").innerHTML = groups.map((g,gi) => {
+    const opts = g.members.map(m =>
+      `<option value="${m.id}" ${m.id===g.canonical?"selected":""}>
+        ${esc(m.nombre)} (${m.ncot} cot, ${m.ncon} con)
+      </option>`).join("");
+
+    const rows = g.members.map(m => `
+      <tr>
+        <td style="padding:4px 8px">${esc(m.nombre)}</td>
+        <td style="padding:4px 8px;color:var(--muted)">${esc(m.pais||"")}</td>
+        <td style="padding:4px 8px;text-align:center">${m.ncot}</td>
+        <td style="padding:4px 8px;text-align:center">${m.ncon}</td>
+      </tr>`).join("");
+
+    return `<div style="border-bottom:2px solid var(--border);padding:12px 16px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:11px;font-weight:700;color:var(--muted)">GRUPO ${gi+1}</span>
+        <label style="font-size:11px;color:var(--txt2)">Conservar nombre:</label>
+        <select id="canonical-${gi}" style="font-size:11px;padding:3px 8px;
+                border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+          ${opts}
+        </select>
+        <input id="rename-${gi}" placeholder="O escribí un nombre nuevo…"
+               style="font-size:11px;padding:3px 8px;border:1px solid var(--border);
+                      border-radius:4px;background:var(--bg);width:180px">
+        <button class="btn btn-warn" style="font-size:11px;padding:3px 10px"
+                onclick="fusionarGrupo(${gi}, [${g.members.map(m=>m.id).join(",")}])">
+          Fusionar →
+        </button>
+      </div>
+      <table style="width:100%;font-size:11px;border-collapse:collapse">
+        <thead><tr style="background:var(--bg)">
+          <th style="padding:4px 8px;text-align:left">Nombre</th>
+          <th style="padding:4px 8px;text-align:left">País</th>
+          <th style="padding:4px 8px;text-align:center">Cotiz.</th>
+          <th style="padding:4px 8px;text-align:center">Cont.</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+}
+
+async function fusionarGrupo(gi, allIds) {
+  const sel      = document.getElementById(`canonical-${gi}`);
+  const renameEl = document.getElementById(`rename-${gi}`);
+  const nuevoNombre = renameEl.value.trim();
+
+  let destinoId = +sel.value;
+  const origenes = allIds.filter(id => id !== destinoId);
+
+  if (!confirm(`¿Fusionar ${origenes.length} empresa(s) hacia "${sel.options[sel.selectedIndex].text.split("(")[0].trim()}"?`)) return;
+
+  // Rename if user typed a new name
+  if (nuevoNombre) {
+    const r = await POST("/api/limpiar/renombrar",
+                         {empresa_id: destinoId, nombre: nuevoNombre});
+    if (!r.ok) { toast(r.error||"Error renombrando","err"); return; }
+  }
+
+  const r = await POST("/api/limpiar/unificar",
+                       {destino_id: destinoId, origen_ids: origenes});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+
+  toast(`✓ ${r.data.fusionadas} empresa(s) fusionadas`);
+  await Promise.all([loadEmpresas(), loadStats()]);
+  await loadLimpieza();
 }
 
 // ── Export / Backup ───────────────────────────────────────────────────────────

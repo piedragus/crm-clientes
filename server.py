@@ -890,6 +890,115 @@ def importar_empresas_desde_carpeta():
         "sample_creadas": creadas[:20],
     })
 
+
+# ── Limpieza y unificación post-importación ───────────────────────────────────
+@app.route("/api/limpiar/preview")
+def limpiar_preview():
+    """
+    Muestra grupos de empresas con nombres similares para unificación.
+    Usa el mismo fuzzy matching de get_similar_empresas.
+    """
+    umbral = max(50, min(to_int(request.args.get("umbral", 85), 85), 100))
+    pares  = db.get_similar_empresas(umbral)
+
+    # Group pairs into clusters using union-find
+    parent = {}
+    def find(x):
+        if x not in parent: parent[x] = x
+        if parent[x] != x: parent[x] = find(parent[x])
+        return parent[x]
+    def union(a, b):
+        pa, pb = find(a), find(b)
+        if pa != pb: parent[pa] = pb
+
+    for p in pares:
+        union(p["id1"], p["id2"])
+
+    clusters = {}
+    for p in pares:
+        root = find(p["id1"])
+        if root not in clusters:
+            clusters[root] = set()
+        clusters[root].add(p["id1"])
+        clusters[root].add(p["id2"])
+
+    empresas_by_id = {e["id"]: e for e in db.fetchall(
+        "SELECT id, nombre, pais, rubro FROM empresas")}
+
+    groups = []
+    for root, ids in clusters.items():
+        members = []
+        for eid in sorted(ids):
+            emp = empresas_by_id.get(eid)
+            if not emp: continue
+            ncot = db.count_by_empresa("cotizaciones", eid)
+            ncon = db.count_by_empresa("contactos", eid)
+            members.append({
+                "id":     eid,
+                "nombre": emp["nombre"],
+                "pais":   emp.get("pais",""),
+                "rubro":  emp.get("rubro",""),
+                "ncot":   ncot,
+                "ncon":   ncon,
+            })
+        if len(members) >= 2:
+            # Suggest canonical: most data wins (cotizaciones + contactos)
+            canonical = max(members, key=lambda m: m["ncot"] + m["ncon"])
+            groups.append({
+                "id":        root,
+                "members":   members,
+                "canonical": canonical["id"],
+            })
+
+    return ok(groups, total=len(groups), umbral=umbral)
+
+
+@app.route("/api/limpiar/unificar", methods=["POST"])
+def limpiar_unificar():
+    """
+    Fusiona una lista de empresas hacia un nombre canónico.
+    body: { destino_id: int, origen_ids: [int, ...] }
+    """
+    b         = request.json or {}
+    destino   = to_int(b.get("destino_id"), 0)
+    origenes  = [to_int(x, 0) for x in (b.get("origen_ids") or []) if to_int(x,0)]
+
+    if not destino: return err("destino_id es obligatorio")
+    if not origenes: return err("origen_ids es obligatorio")
+    if not db.obtener_empresa_por_id(destino):
+        return err("Empresa destino no encontrada", 404)
+
+    ok_count = err_count = 0
+    for origen in origenes:
+        if origen == destino: continue
+        ok2 = db.unificar_empresas(origen, destino)
+        if ok2: ok_count += 1
+        else:   err_count += 1
+
+    return ok({"fusionadas": ok_count, "errores": err_count})
+
+
+@app.route("/api/limpiar/renombrar", methods=["POST"])
+def limpiar_renombrar():
+    """
+    Renombra una empresa sin fusionar (útil para limpiar variantes de nombre).
+    body: { empresa_id: int, nombre: str }
+    """
+    b     = request.json or {}
+    eid   = to_int(b.get("empresa_id"), 0)
+    nuevo = clean(b.get("nombre",""))
+    if not eid or not nuevo: return err("empresa_id y nombre son obligatorios")
+    emp = db.obtener_empresa_por_id(eid)
+    if not emp: return err("Empresa no encontrada", 404)
+    ok2 = db.editar_empresa(
+        eid, nuevo,
+        emp.get("direccion",""), emp.get("telefono",""),
+        emp.get("email",""), emp.get("rubro",""),
+        emp.get("pais",""), ", ".join(db.get_tags_de_empresa(eid)),
+        fuente="limpieza")
+    if not ok2: return err("No se pudo renombrar")
+    return ok()
+
 # ── Exportar ──────────────────────────────────────────────────────────────────
 @app.route("/api/exportar")
 def exportar():

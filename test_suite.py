@@ -4939,6 +4939,121 @@ class TestImportadorEmpresasDetectadas(unittest.TestCase):
         if data["total"] > 1:
             self.assertTrue(data["has_more"])
 
+
+
+# =====================================================================
+# 55. LIMPIEZA Y UNIFICACIÓN
+# =====================================================================
+class TestLimpiezaUnificacion(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db     = _db
+        # Create similar empresas
+        for nombre in ("ACME SA","Acme Sa","ACME","Beta Corp","BETA CORP"):
+            self.db.agregar_empresa(nombre,"","","","","","")
+        self.ids = {}
+        for nombre in ("ACME SA","Acme Sa","ACME","Beta Corp","BETA CORP"):
+            r = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if r: self.ids[nombre] = r["id"]
+
+    def tearDown(self):
+        for nombre, eid in self.ids.items():
+            try: self.db.eliminar_empresa(eid)
+            except: pass
+
+    def test_preview_encuentra_grupos(self):
+        r = self.client.get("/api/limpiar/preview?umbral=80")
+        self.assertEqual(r.status_code, 200)
+        groups = r.get_json()["data"]
+        self.assertGreater(len(groups), 0)
+        for g in groups:
+            self.assertIn("members", g)
+            self.assertIn("canonical", g)
+            self.assertGreaterEqual(len(g["members"]), 2)
+
+    def test_preview_umbral_100_solo_identicos(self):
+        r = self.client.get("/api/limpiar/preview?umbral=100")
+        self.assertEqual(r.status_code, 200)
+        groups = r.get_json()["data"]
+        for g in groups:
+            for m in g["members"]:
+                self.assertEqual(m["nombre"].lower(),
+                    g["members"][0]["nombre"].lower(),
+                    "umbral=100 solo debe agrupar idénticos")
+
+    def test_unificar_fusiona_hacia_destino(self):
+        destino = self.ids.get("ACME SA")
+        origen  = self.ids.get("Acme Sa")
+        if not destino or not origen: self.skipTest("empresas no creadas")
+        r = self.client.post("/api/limpiar/unificar",
+                             json={"destino_id": destino,
+                                   "origen_ids": [origen]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["data"]["fusionadas"], 1)
+        # origen debe haber desaparecido
+        self.assertIsNone(self.db.obtener_empresa_por_id(origen))
+        del self.ids["Acme Sa"]
+
+    def test_unificar_sin_destino_da_400(self):
+        r = self.client.post("/api/limpiar/unificar",
+                             json={"origen_ids": [1]})
+        self.assertEqual(r.status_code, 400)
+
+    def test_unificar_sin_origenes_da_400(self):
+        r = self.client.post("/api/limpiar/unificar",
+                             json={"destino_id": 1, "origen_ids": []})
+        self.assertEqual(r.status_code, 400)
+
+    def test_unificar_destino_inexistente_404(self):
+        r = self.client.post("/api/limpiar/unificar",
+                             json={"destino_id": 999999, "origen_ids": [1]})
+        self.assertEqual(r.status_code, 404)
+
+    def test_renombrar_empresa(self):
+        eid = self.ids.get("ACME")
+        if not eid: self.skipTest("empresa no creada")
+        r = self.client.post("/api/limpiar/renombrar",
+                             json={"empresa_id": eid,
+                                   "nombre": "ACME Corporation"})
+        self.assertEqual(r.status_code, 200)
+        emp = self.db.obtener_empresa_por_id(eid)
+        self.assertEqual(emp["nombre"], "ACME Corporation")
+
+    def test_renombrar_sin_nombre_400(self):
+        eid = self.ids.get("ACME")
+        if not eid: self.skipTest("empresa no creada")
+        r = self.client.post("/api/limpiar/renombrar",
+                             json={"empresa_id": eid, "nombre": ""})
+        self.assertEqual(r.status_code, 400)
+
+    def test_canonical_sugerido_tiene_mas_datos(self):
+        """El canónico sugerido debe ser el que tiene más cotizaciones+contactos."""
+        destino = self.ids.get("ACME SA")
+        origen  = self.ids.get("ACME")
+        if not destino or not origen: self.skipTest("empresas no creadas")
+        # Add cotizaciones to destino only
+        for i in range(3):
+            self.db.agregar_cotizacion(destino, f"Cot {i}", float(i*100))
+        r = self.client.get("/api/limpiar/preview?umbral=80")
+        groups = r.get_json()["data"]
+        for g in groups:
+            member_ids = {m["id"] for m in g["members"]}
+            if destino in member_ids and origen in member_ids:
+                self.assertEqual(g["canonical"], destino,
+                    "El canónico debe ser el que tiene más datos")
+                break
+
+    def test_preview_incluye_ncot_ncon(self):
+        r = self.client.get("/api/limpiar/preview?umbral=80")
+        groups = r.get_json()["data"]
+        if groups:
+            for m in groups[0]["members"]:
+                self.assertIn("ncot", m)
+                self.assertIn("ncon", m)
+
 class TestActividadesHTTP(unittest.TestCase):
     def setUp(self):
         from server import app, db as _db
