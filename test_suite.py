@@ -5507,6 +5507,109 @@ class TestActividadesHTTP(unittest.TestCase):
         self.assertEqual(acts[0]["tipo"], "nota")
 
 
+# =====================================================================
+# TESTS ALIASES
+# =====================================================================
+
+from utils.normalizacion import normalizar_alias_empresa
+from utils.excepciones import AliasConflictError, EmpresaNotFoundError, AliasValidationError
+
+
+class TestNormalizacionAliases(unittest.TestCase):
+
+    def test_normalizacion_alias_empresa(self):
+        self.assertEqual(normalizar_alias_empresa("ACME S.A."), "acme")
+        self.assertEqual(normalizar_alias_empresa("ÁCME   S.R.L."), "acme")
+        self.assertEqual(
+            normalizar_alias_empresa("La Compañía del Trigo S.A.S."),
+            "la compania del trigo",
+        )
+        self.assertEqual(normalizar_alias_empresa("FOO LLC"), "foo")
+        self.assertEqual(normalizar_alias_empresa("SA"), "sa")
+        self.assertEqual(normalizar_alias_empresa("Compañía X"), "compania x")
+        self.assertEqual(normalizar_alias_empresa(None), "")
+
+    def test_normalizacion_idempotente(self):
+        x = "Zapatería Silva E.I.R.L."
+        n = normalizar_alias_empresa(x)
+        self.assertEqual(normalizar_alias_empresa(n), n)
+
+
+class TestDBAliases(unittest.TestCase):
+
+    def setUp(self):
+        self.db = DBManager(":memory:")
+        with self.db._get_connection() as conn:
+            self.emp_a = conn.execute(
+                "INSERT INTO empresas (nombre) VALUES ('Empresa A')"
+            ).lastrowid
+            self.emp_b = conn.execute(
+                "INSERT INTO empresas (nombre) VALUES ('Empresa B')"
+            ).lastrowid
+            conn.commit()
+
+    def test_agregar_y_buscar_alias(self):
+        res = self.db.agregar_alias_empresa(self.emp_a, "Alfa S.A.")
+        self.assertEqual(res["action"], "created")
+        emp = self.db.buscar_empresa_por_alias("Alfa SA")
+        self.assertIsNotNone(emp)
+        self.assertEqual(emp["id"], self.emp_a)
+
+    def test_alias_idempotente_misma_empresa(self):
+        self.db.agregar_alias_empresa(self.emp_a, "Alfa S.A.")
+        res = self.db.agregar_alias_empresa(self.emp_a, "Alfa SA")
+        self.assertEqual(res["action"], "existing")
+
+    def test_alias_conflicto_otra_empresa(self):
+        self.db.agregar_alias_empresa(self.emp_a, "Alfa S.A.")
+        with self.assertRaises(AliasConflictError):
+            self.db.agregar_alias_empresa(self.emp_b, "Alfa SA")
+
+    def test_eliminar_alias(self):
+        res = self.db.agregar_alias_empresa(self.emp_a, "Alfa S.A.")
+        alias_id = res["id"]
+        eliminado = self.db.eliminar_alias_empresa(alias_id, self.emp_a)
+        self.assertTrue(eliminado)
+        emp = self.db.buscar_empresa_por_alias("Alfa S.A.")
+        self.assertIsNone(emp)
+
+    def test_migrar_aliases_origen_a_destino(self):
+        self.db.agregar_alias_empresa(self.emp_b, "Alias Betis")
+        reporte = self.db.migrar_aliases_empresa(
+            origen_id=self.emp_b,
+            destino_id=self.emp_a,
+        )
+        self.assertEqual(reporte["migrados"], 1)
+        self.assertEqual(reporte["conflictos"], 0)
+        aliases_a = self.db.get_aliases_empresa(self.emp_a)
+        self.assertEqual(len(aliases_a), 1)
+        self.assertEqual(aliases_a[0]["alias_norm"], "alias betis")
+        aliases_b = self.db.get_aliases_empresa(self.emp_b)
+        self.assertEqual(len(aliases_b), 0)
+
+    def test_empresa_not_found(self):
+        with self.assertRaises(EmpresaNotFoundError):
+            self.db.agregar_alias_empresa(99999, "Fantasma")
+
+    def test_alias_vacio_raises(self):
+        with self.assertRaises(AliasValidationError):
+            self.db.agregar_alias_empresa(self.emp_a, "   ")
+
+    def test_get_aliases_empresa_vacia(self):
+        aliases = self.db.get_aliases_empresa(self.emp_a)
+        self.assertEqual(aliases, [])
+
+    def test_eliminar_alias_empresa_incorrecta(self):
+        res = self.db.agregar_alias_empresa(self.emp_a, "Test Alias")
+        alias_id = res["id"]
+        # Intentar borrar con empresa incorrecta debe devolver False
+        eliminado = self.db.eliminar_alias_empresa(alias_id, self.emp_b)
+        self.assertFalse(eliminado)
+        # Aún debe existir
+        emp = self.db.buscar_empresa_por_alias("Test Alias")
+        self.assertIsNotNone(emp)
+
+
 # RUNNER
 # =====================================================================
 if __name__ == "__main__":
