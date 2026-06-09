@@ -10,6 +10,11 @@ from flask import Flask, request, jsonify, send_from_directory, Response, send_f
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from db_manager import DBManager
 from utils import Config, BackupManager, Exportador, formatear_fecha
+from utils.excepciones import (
+    AliasValidationError,
+    EmpresaNotFoundError,
+    AliasConflictError,
+)
 from config_export import get_app_config
 
 # ── Logging to file ───────────────────────────────────────────────────────────
@@ -949,6 +954,54 @@ def importar_empresas_desde_carpeta():
         "errores":      errores,
         "sample_creadas": creadas[:20],
     })
+
+
+# ── Aliases de empresas ───────────────────────────────────────────────────────
+@app.route("/api/empresas/<int:empresa_id>/aliases", methods=["GET"])
+def api_get_aliases_empresa(empresa_id):
+    try:
+        data = db.get_aliases_empresa(empresa_id)
+        return jsonify({"ok": True, "data": data}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/empresas/<int:empresa_id>/aliases", methods=["POST"])
+def api_post_alias_empresa(empresa_id):
+    body = request.json or {}
+    alias_raw = (body.get("alias") or "").strip()
+    origen = body.get("origen") or "manual"
+    confianza = body.get("confianza", 1.0)
+    try:
+        resultado = db.agregar_alias_empresa(
+            empresa_id=empresa_id,
+            alias=alias_raw,
+            origen=origen,
+            confianza=confianza,
+        )
+        return jsonify({"ok": True, "data": resultado}), 201
+    except AliasValidationError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except EmpresaNotFoundError as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+    except AliasConflictError as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    except Exception:
+        return jsonify({"ok": False, "error": "Error interno inesperado."}), 500
+
+
+@app.route("/api/empresas/<int:empresa_id>/aliases/<int:alias_id>", methods=["DELETE"])
+def api_delete_alias_empresa(empresa_id, alias_id):
+    try:
+        eliminado = db.eliminar_alias_empresa(
+            alias_id=alias_id,
+            empresa_id=empresa_id,
+        )
+        if not eliminado:
+            return jsonify({"ok": False, "error": "Alias no encontrado."}), 404
+        return jsonify({"ok": True, "data": {"eliminado": True}}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ── Limpieza y unificación post-importación ───────────────────────────────────
