@@ -324,10 +324,14 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 <div id="sidebar">
   <div id="logo"><strong>CRM</strong><span>Clientes</span></div>
   <div id="stats">
-    <div class="stat-card c-emp"><div class="lbl">Empresas</div><div class="val" id="s-emp">—</div></div>
-    <div class="stat-card c-con"><div class="lbl">Contactos</div><div class="val" id="s-con">—</div></div>
-    <div class="stat-card c-cot"><div class="lbl">Cotizaciones</div><div class="val" id="s-cot">—</div></div>
-    <div class="stat-card c-rec"><div class="lbl">Activas 30d</div><div class="val" id="s-rec">—</div></div>
+    <div class="stat-card c-emp" onclick="showMain();loadEmpresas()" style="cursor:pointer" title="Ver empresas">
+      <div class="lbl">Empresas</div><div class="val" id="s-emp">—</div></div>
+    <div class="stat-card c-con" onclick="showMain();loadEmpresas()" style="cursor:pointer" title="Ver contactos">
+      <div class="lbl">Contactos</div><div class="val" id="s-con">—</div></div>
+    <div class="stat-card c-cot" onclick="showSearch()" style="cursor:pointer" title="Buscar cotizaciones">
+      <div class="lbl">Cotizaciones</div><div class="val" id="s-cot">—</div></div>
+    <div class="stat-card c-rec" onclick="showMain();loadEmpresas()" style="cursor:pointer" title="Activas últimos 30 días">
+      <div class="lbl">Activas 30d</div><div class="val" id="s-rec">—</div></div>
   </div>
 
   <div class="nav-sep">Ventas</div>
@@ -3006,11 +3010,6 @@ async function showPipeline() {
   document.getElementById("body").style.display          = "none";
   document.getElementById("pipeline-page").classList.add("active");
   await loadPipeline();
-}
-
-function showMain() {
-  document.getElementById("pipeline-page").classList.remove("active");
-  document.getElementById("body").style.display = "flex";
 }
 
 async function loadPipeline() {
