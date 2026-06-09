@@ -5508,8 +5508,101 @@ class TestActividadesHTTP(unittest.TestCase):
 
 
 # =====================================================================
-# TESTS ALIASES
+# TESTS ALIASES HTTP
 # =====================================================================
+class TestAliasesHTTP(unittest.TestCase):
+    def setUp(self):
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db = _db
+        self.db.agregar_empresa("AliasHTTP SA", "", "", "", "", "", "")
+        r = self.db.fetchone("SELECT id FROM empresas WHERE nombre='AliasHTTP SA'")
+        self.eid = r["id"]
+
+    def tearDown(self):
+        self.db.ejecutar("DELETE FROM empresa_aliases WHERE empresa_id=?", (self.eid,))
+        self.db.eliminar_empresa(self.eid)
+
+    def test_get_aliases_vacio(self):
+        r = self.client.get(f"/api/empresas/{self.eid}/aliases")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["data"], [])
+
+    def test_post_alias_201(self):
+        r = self.client.post(
+            f"/api/empresas/{self.eid}/aliases",
+            json={"alias": "Alias Prueba"},
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 201)
+        data = r.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["data"]["action"], "created")
+
+    def test_post_alias_idempotente(self):
+        self.client.post(f"/api/empresas/{self.eid}/aliases",
+                         json={"alias": "Beta SA"}, content_type="application/json")
+        r = self.client.post(f"/api/empresas/{self.eid}/aliases",
+                              json={"alias": "Beta"}, content_type="application/json")
+        data = r.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["data"]["action"], "existing")
+
+    def test_post_alias_empresa_inexistente_404(self):
+        r = self.client.post(
+            "/api/empresas/99999/aliases",
+            json={"alias": "Cualquiera"},
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_post_alias_vacio_400(self):
+        r = self.client.post(
+            f"/api/empresas/{self.eid}/aliases",
+            json={"alias": "   "},
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_post_alias_conflicto_409(self):
+        self.db.agregar_empresa("OtraHTTP", "", "", "", "", "", "")
+        otra = self.db.fetchone("SELECT id FROM empresas WHERE nombre='OtraHTTP'")["id"]
+        try:
+            self.db.agregar_alias_empresa(otra, "ConflictoAlias")
+            r = self.client.post(
+                f"/api/empresas/{self.eid}/aliases",
+                json={"alias": "ConflictoAlias"},
+                content_type="application/json",
+            )
+            self.assertEqual(r.status_code, 409)
+        finally:
+            self.db.ejecutar("DELETE FROM empresa_aliases WHERE empresa_id=?", (otra,))
+            self.db.eliminar_empresa(otra)
+
+    def test_get_aliases_despues_de_agregar(self):
+        self.client.post(f"/api/empresas/{self.eid}/aliases",
+                         json={"alias": "Test Get"}, content_type="application/json")
+        r = self.client.get(f"/api/empresas/{self.eid}/aliases")
+        data = r.get_json()
+        self.assertEqual(len(data["data"]), 1)
+        self.assertEqual(data["data"][0]["alias"], "Test Get")
+
+    def test_delete_alias_200(self):
+        res = self.db.agregar_alias_empresa(self.eid, "Para Borrar")
+        alias_id = res["id"]
+        r = self.client.delete(f"/api/empresas/{self.eid}/aliases/{alias_id}")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+
+    def test_delete_alias_inexistente_404(self):
+        r = self.client.delete(f"/api/empresas/{self.eid}/aliases/99999")
+        self.assertEqual(r.status_code, 404)
+
+
+
 
 from utils.normalizacion import normalizar_alias_empresa
 from utils.excepciones import AliasConflictError, EmpresaNotFoundError, AliasValidationError
