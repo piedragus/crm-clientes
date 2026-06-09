@@ -1382,7 +1382,13 @@ def importar_subcarpetas():
 
         nombre = nombre.strip()
 
-        eid = emp_by_nombre.get(nombre.lower())
+        # 1. Resolver por alias exacto normalizado (Sprint B)
+        alias_match = db.buscar_empresa_por_alias(nombre)
+        if alias_match:
+            eid = alias_match["id"]
+        else:
+            # 2. Flujo viejo: nombre exacto case-insensitive
+            eid = emp_by_nombre.get(nombre.lower())
         if not eid:
             ok2 = db.agregar_empresa(nombre, "", "", "", "", pais, "")
             if ok2:
@@ -1598,13 +1604,18 @@ def importar_masivo():
                 continue
 
             # Find or create empresa
-            eid = emp_by_nombre.get(client_name.lower())
-            if not eid:
-                # Try case-insensitive match
-                for en, eid_try in emp_by_nombre.items():
-                    if en == client_name.lower():
-                        eid = eid_try
-                        break
+            # 1. Resolver por alias exacto normalizado (Sprint B)
+            alias_match = db.buscar_empresa_por_alias(client_name)
+            if alias_match:
+                eid = alias_match["id"]
+            else:
+                # 2. Flujo viejo: nombre exacto case-insensitive
+                eid = emp_by_nombre.get(client_name.lower())
+                if not eid:
+                    for en, eid_try in emp_by_nombre.items():
+                        if en == client_name.lower():
+                            eid = eid_try
+                            break
 
             if not eid:
                 # Create new empresa
