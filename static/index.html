@@ -565,6 +565,20 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           </tr></thead>
           <tbody id="con-body"></tbody></table>
         </div>
+
+        <div id="aliases-section" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <strong style="font-size:12px;color:var(--txt)">Aliases</strong>
+          </div>
+          <div style="display:flex;gap:6px;margin-bottom:8px">
+            <input id="input-alias"
+                   placeholder="Nombre alternativo..."
+                   style="flex:1;border:1px solid var(--border);padding:5px 10px;
+                          border-radius:4px;font-size:12px;background:var(--bg);outline:none">
+            <button class="btn btn-primary" onclick="addAliasEmpresa()">Agregar</button>
+          </div>
+          <div id="lista-aliases" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
       </div>
 
       <!-- Tab Cotizaciones -->
@@ -605,20 +619,6 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
             </div>
           </div>
         </div>
-      </div>
-
-      <div id="aliases-section" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;padding-left:12px;padding-right:12px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <strong style="font-size:12px;color:var(--txt)">Aliases</strong>
-        </div>
-        <div style="display:flex;gap:6px;margin-bottom:8px">
-          <input id="input-alias"
-                 placeholder="Nombre alternativo..."
-                 style="flex:1;border:1px solid var(--border);padding:5px 10px;
-                        border-radius:4px;font-size:12px;background:var(--bg);outline:none">
-          <button class="btn btn-primary" onclick="addAliasEmpresa()">Agregar</button>
-        </div>
-        <div id="lista-aliases" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       </div>
 
       <div id="placeholder" style="display:none">

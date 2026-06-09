@@ -959,6 +959,8 @@ def importar_empresas_desde_carpeta():
 # ── Aliases de empresas ───────────────────────────────────────────────────────
 @app.route("/api/empresas/<int:empresa_id>/aliases", methods=["GET"])
 def api_get_aliases_empresa(empresa_id):
+    if not db.obtener_empresa_por_id(empresa_id):
+        return err("Empresa no encontrada", 404)
     try:
         data = db.get_aliases_empresa(empresa_id)
         return jsonify({"ok": True, "data": data}), 200
@@ -968,10 +970,15 @@ def api_get_aliases_empresa(empresa_id):
 
 @app.route("/api/empresas/<int:empresa_id>/aliases", methods=["POST"])
 def api_post_alias_empresa(empresa_id):
+    if not db.obtener_empresa_por_id(empresa_id):
+        return err("Empresa no encontrada", 404)
     body = request.json or {}
     alias_raw = (body.get("alias") or "").strip()
     origen = body.get("origen") or "manual"
-    confianza = body.get("confianza", 1.0)
+    try:
+        confianza = float(body.get("confianza", 1.0))
+    except (TypeError, ValueError):
+        return err("confianza debe ser numérica", 400)
     try:
         resultado = db.agregar_alias_empresa(
             empresa_id=empresa_id,
@@ -1078,6 +1085,8 @@ def limpiar_unificar():
 
     if not destino: return err("destino_id es obligatorio")
     if not origenes: return err("origen_ids es obligatorio")
+    if destino in origenes:
+        return err("No se puede unificar una empresa consigo misma", 400)
     if not db.obtener_empresa_por_id(destino):
         return err("Empresa destino no encontrada", 404)
 
@@ -1334,6 +1343,12 @@ def importar_subcarpetas():
     emp_by_nombre  = {e["nombre"].lower(): e["id"]
                       for e in db.fetchall("SELECT id, nombre FROM empresas")}
 
+    from utils.normalizacion import normalizar_alias_empresa as _norm_alias
+    alias_cache = {
+        row["alias_norm"]: row["empresa_id"]
+        for row in db.fetchall("SELECT alias_norm, empresa_id FROM empresa_aliases")
+    }
+
     crear_backup_seguro("antes_importar_subcarpetas")
 
     # Collect all files from selected subcarpetas
@@ -1382,11 +1397,10 @@ def importar_subcarpetas():
 
         nombre = nombre.strip()
 
-        # 1. Resolver por alias exacto normalizado (Sprint B)
-        alias_match = db.buscar_empresa_por_alias(nombre)
-        if alias_match:
-            eid = alias_match["id"]
-        else:
+        # 1. Resolver por alias exacto normalizado (cache, sin N+1)
+        norm = _norm_alias(nombre)
+        eid = alias_cache.get(norm)
+        if not eid:
             # 2. Flujo viejo: nombre exacto case-insensitive
             eid = emp_by_nombre.get(nombre.lower())
         if not eid:
@@ -1559,6 +1573,12 @@ def importar_masivo():
     empresas_existentes = db.fetchall("SELECT id, nombre FROM empresas")
     emp_by_nombre = {e["nombre"].lower(): e["id"] for e in empresas_existentes}
 
+    from utils.normalizacion import normalizar_alias_empresa as _norm_alias
+    alias_cache = {
+        row["alias_norm"]: row["empresa_id"]
+        for row in db.fetchall("SELECT alias_norm, empresa_id FROM empresa_aliases")
+    }
+
     from datetime import datetime as _dt
     import re
 
@@ -1604,11 +1624,10 @@ def importar_masivo():
                 continue
 
             # Find or create empresa
-            # 1. Resolver por alias exacto normalizado (Sprint B)
-            alias_match = db.buscar_empresa_por_alias(client_name)
-            if alias_match:
-                eid = alias_match["id"]
-            else:
+            # 1. Resolver por alias exacto normalizado (cache, sin N+1)
+            norm = _norm_alias(client_name)
+            eid = alias_cache.get(norm)
+            if not eid:
                 # 2. Flujo viejo: nombre exacto case-insensitive
                 eid = emp_by_nombre.get(client_name.lower())
                 if not eid:
