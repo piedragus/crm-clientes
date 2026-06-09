@@ -3,6 +3,13 @@ import sqlite3
 import logging
 import threading
 from typing import List, Dict, Tuple, Optional
+
+from utils.normalizacion import normalizar_alias_empresa
+from utils.excepciones import (
+    AliasValidationError,
+    EmpresaNotFoundError,
+    AliasConflictError,
+)
 try:
     from fuzzywuzzy import fuzz
 except Exception:
@@ -330,6 +337,7 @@ class DBManager:
 
                 conn.commit()
             self._ensure_tags_schema()
+            self._ensure_empresa_aliases_schema()
         except Exception as e:
             logging.error(f"Error al crear tablas: {e}")
 
@@ -422,6 +430,185 @@ class DBManager:
                     conn.commit()
         except Exception as e:
             logging.error(f"Error al normalizar tabla tags: {e}")
+
+    def _ensure_empresa_aliases_schema(self):
+        """Crea tabla empresa_aliases e índices si no existen."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS empresa_aliases (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+                        alias TEXT NOT NULL,
+                        alias_norm TEXT NOT NULL UNIQUE,
+                        origen TEXT DEFAULT 'manual',
+                        confianza REAL DEFAULT 1.0,
+                        fecha_creacion TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_empresa_aliases_empresa_id
+                    ON empresa_aliases(empresa_id)
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_empresa_aliases_alias_norm
+                    ON empresa_aliases(alias_norm)
+                """)
+                conn.commit()
+        except Exception as e:
+            logging.error(f"Error al crear tabla empresa_aliases: {e}")
+
+    def agregar_alias_empresa(
+        self,
+        empresa_id: int,
+        alias: str,
+        origen: str = "manual",
+        confianza: float = 1.0,
+    ) -> dict:
+        norm = normalizar_alias_empresa(alias)
+        if not norm:
+            raise AliasValidationError("El alias no puede quedar vacío después de normalizarse.")
+
+        with self._get_connection() as conn:
+            emp = conn.execute(
+                "SELECT id FROM empresas WHERE id = ?",
+                (empresa_id,),
+            ).fetchone()
+
+            if not emp:
+                raise EmpresaNotFoundError(f"La empresa con ID {empresa_id} no existe.")
+
+            existente = conn.execute("""
+                SELECT id, empresa_id
+                FROM empresa_aliases
+                WHERE alias_norm = ?
+            """, (norm,)).fetchone()
+
+            if existente:
+                if existente["empresa_id"] == empresa_id:
+                    return {
+                        "status": "success",
+                        "action": "existing",
+                        "id": existente["id"],
+                    }
+                raise AliasConflictError(
+                    f"El alias '{alias}' ya está asignado a otra empresa "
+                    f"(ID: {existente['empresa_id']})."
+                )
+
+            conn.execute("""
+                INSERT INTO empresa_aliases
+                    (empresa_id, alias, alias_norm, origen, confianza)
+                VALUES (?, ?, ?, ?, ?)
+            """, (empresa_id, alias, norm, origen, confianza))
+            conn.commit()
+
+            row = conn.execute(
+                "SELECT id FROM empresa_aliases WHERE alias_norm = ?", (norm,)
+            ).fetchone()
+
+            return {
+                "status": "success",
+                "action": "created",
+                "id": row["id"],
+            }
+
+    def buscar_empresa_por_alias_norm(self, alias_norm: str) -> dict | None:
+        if not alias_norm:
+            return None
+        with self._get_connection() as conn:
+            row = conn.execute("""
+                SELECT e.*
+                FROM empresas e
+                JOIN empresa_aliases a ON e.id = a.empresa_id
+                WHERE a.alias_norm = ?
+            """, (alias_norm,)).fetchone()
+            return dict(row) if row else None
+
+    def buscar_empresa_por_alias(self, alias: str) -> dict | None:
+        norm = normalizar_alias_empresa(alias)
+        return self.buscar_empresa_por_alias_norm(norm)
+
+    def get_aliases_empresa(self, empresa_id: int) -> list:
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT id, alias, alias_norm, origen, confianza, fecha_creacion
+                FROM empresa_aliases
+                WHERE empresa_id = ?
+                ORDER BY fecha_creacion DESC, id DESC
+            """, (empresa_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def eliminar_alias_empresa(self, alias_id: int, empresa_id: int | None = None) -> bool:
+        with self._get_connection() as conn:
+            if empresa_id is not None:
+                cursor = conn.execute("""
+                    DELETE FROM empresa_aliases
+                    WHERE id = ? AND empresa_id = ?
+                """, (alias_id, empresa_id))
+            else:
+                cursor = conn.execute("""
+                    DELETE FROM empresa_aliases
+                    WHERE id = ?
+                """, (alias_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def migrar_aliases_empresa(self, origen_id: int, destino_id: int) -> dict:
+        """
+        Migra aliases de empresa origen a empresa destino.
+        En DB sana con alias_norm UNIQUE, lo normal es UPDATE directo.
+        La lógica de conflictos es defensiva para estados legacy/corruptos.
+        """
+        reporte = {
+            "migrados": 0,
+            "existentes_destino": 0,
+            "conflictos": 0,
+        }
+
+        if origen_id == destino_id:
+            return reporte
+
+        with self._get_connection() as conn:
+            aliases_origen = conn.execute("""
+                SELECT id, alias_norm
+                FROM empresa_aliases
+                WHERE empresa_id = ?
+            """, (origen_id,)).fetchall()
+
+            for item in aliases_origen:
+                alias_id = item["id"]
+                alias_norm = item["alias_norm"]
+
+                colision = conn.execute("""
+                    SELECT id, empresa_id
+                    FROM empresa_aliases
+                    WHERE alias_norm = ?
+                      AND empresa_id != ?
+                """, (alias_norm, origen_id)).fetchone()
+
+                if colision:
+                    if colision["empresa_id"] == destino_id:
+                        reporte["existentes_destino"] += 1
+                        conn.execute(
+                            "DELETE FROM empresa_aliases WHERE id = ?",
+                            (alias_id,),
+                        )
+                    else:
+                        reporte["conflictos"] += 1
+                    continue
+
+                conn.execute("""
+                    UPDATE empresa_aliases
+                    SET empresa_id = ?
+                    WHERE id = ?
+                """, (destino_id, alias_id))
+
+                reporte["migrados"] += 1
+
+            conn.commit()
+
+        return reporte
 
     def get_filtered_empresas(self, search_term: str, filtros: Dict = None) -> List[Dict]:
         filtros = filtros or {}

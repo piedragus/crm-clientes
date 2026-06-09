@@ -565,6 +565,20 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           </tr></thead>
           <tbody id="con-body"></tbody></table>
         </div>
+
+        <div id="aliases-section" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <strong style="font-size:12px;color:var(--txt)">Aliases</strong>
+          </div>
+          <div style="display:flex;gap:6px;margin-bottom:8px">
+            <input id="input-alias"
+                   placeholder="Nombre alternativo..."
+                   style="flex:1;border:1px solid var(--border);padding:5px 10px;
+                          border-radius:4px;font-size:12px;background:var(--bg);outline:none">
+            <button class="btn btn-primary" onclick="addAliasEmpresa()">Agregar</button>
+          </div>
+          <div id="lista-aliases" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
       </div>
 
       <!-- Tab Cotizaciones -->
@@ -1185,6 +1199,7 @@ const S = {
   sortCol: "nombre", sortAsc: true,
   selEmpresa: null, selContacto: null, selCotizacion: null,
   contactos: [], cotizaciones: [],
+  aliases: [],
   editMode: false,
   filters: {},
   histSel: null, histRows: [],
@@ -1347,7 +1362,7 @@ async function selectEmpresa(id) {
   S.selEmpresa = r.data;
   S.selContacto = null; S.selCotizacion = null;
   renderEmpresaDetail();
-  await Promise.all([loadContactos(), loadCotizaciones(), loadActividades()]);
+  await Promise.all([loadContactos(), loadCotizaciones(), loadActividades(), loadAliasesEmpresa()]);
   enableDetailBtns(true);
   renderList(); // re-render to show selection
 }
@@ -1435,6 +1450,7 @@ async function delEmpresa() {
   const actTxt = document.getElementById("act-texto");
   if (actTxt) actTxt.value = "";
   S.actividades = [];
+  clearAliasesEmpresa();
   await Promise.all([loadEmpresas(), loadStats()]);
 }
 
@@ -3210,6 +3226,86 @@ document.addEventListener("click", e => {
 function esc(s) {
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")
                       .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ── Aliases de empresa ────────────────────────────────────────────────────────
+async function loadAliasesEmpresa() {
+  if (!S.selEmpresa || !S.selEmpresa.id) return;
+  try {
+    const r = await GET(`/api/empresas/${S.selEmpresa.id}/aliases`);
+    S.aliases = r.ok ? (r.data || []) : [];
+    renderAliasesEmpresa(S.aliases);
+  } catch (err) {
+    console.error("Error cargando aliases", err);
+    S.aliases = [];
+    renderAliasesEmpresa([]);
+  }
+}
+
+function renderAliasesEmpresa(aliases) {
+  const container = document.getElementById("lista-aliases");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!aliases || aliases.length === 0) {
+    container.innerHTML = '<span style="color:var(--muted);font-size:11px">Sin aliases.</span>';
+    return;
+  }
+  aliases.forEach(item => {
+    const chip = document.createElement("div");
+    chip.style.cssText =
+      "display:flex;align-items:center;gap:6px;padding:3px 7px;" +
+      "background:var(--panel);border:1px solid var(--border);" +
+      "border-radius:4px;font-size:11px";
+    chip.innerHTML = `
+      <span>${esc(item.alias || "")}</span>
+      <span style="color:var(--muted);font-size:10px">${esc(item.origen || "")}</span>
+      <button class="btn btn-ghost"
+              onclick="deleteAliasEmpresa(${item.id})"
+              title="Borrar alias"
+              style="padding:0 4px;color:#b91c1c;font-size:11px">×</button>
+    `;
+    container.appendChild(chip);
+  });
+}
+
+async function addAliasEmpresa() {
+  if (!S.selEmpresa || !S.selEmpresa.id) return;
+  const input = document.getElementById("input-alias");
+  if (!input) return;
+  const alias = input.value.trim();
+  if (!alias) return;
+  try {
+    const r = await POST(`/api/empresas/${S.selEmpresa.id}/aliases`, { alias, origen: "manual" });
+    if (!r.ok) { toast(r.error || "Error agregando alias", "err"); return; }
+    input.value = "";
+    toast("Alias agregado");
+    await loadAliasesEmpresa();
+  } catch (err) {
+    console.error("Error agregando alias", err);
+    toast("Error de red", "err");
+  }
+}
+
+async function deleteAliasEmpresa(aliasId) {
+  if (!S.selEmpresa || !S.selEmpresa.id) return;
+  if (!confirm("¿Borrar alias?")) return;
+  try {
+    const r = await DEL(`/api/empresas/${S.selEmpresa.id}/aliases/${aliasId}`);
+    if (!r.ok) { toast(r.error || "Error borrando alias", "err"); return; }
+    toast("Alias borrado");
+    await loadAliasesEmpresa();
+  } catch (err) {
+    console.error("Error borrando alias", err);
+    toast("Error de red", "err");
+  }
+}
+
+function clearAliasesEmpresa() {
+  S.aliases = [];
+  const list = document.getElementById("lista-aliases");
+  if (list) list.innerHTML = "";
+  const input = document.getElementById("input-alias");
+  if (input) input.value = "";
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
