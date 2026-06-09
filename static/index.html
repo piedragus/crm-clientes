@@ -1303,9 +1303,15 @@ function renderList() {
       : total;
   const hasServerNext = S.serverPage < S.serverPages - 1;
   const hasServerPrev = S.serverPage > 0;
-  document.getElementById("pg-label").textContent =
-    pages > 1 ? `${S.page+1}/${pages}` :
-    S.serverPages > 1 ? `Pág ${S.serverPage+1}/${S.serverPages}` : "";
+  // Show server page when there are multiple server pages
+  if (S.serverPages > 1) {
+    document.getElementById("pg-label").textContent =
+      `Pág ${S.serverPage+1} / ${S.serverPages}  (${S.totalEmpresas} empresas)`;
+  } else if (pages > 1) {
+    document.getElementById("pg-label").textContent = `${S.page+1}/${pages}`;
+  } else {
+    document.getElementById("pg-label").textContent = "";
+  }
   document.getElementById("pg-prev").disabled = S.page === 0 && !hasServerPrev;
   document.getElementById("pg-next").disabled = S.page >= pages-1 && !hasServerNext;
 
