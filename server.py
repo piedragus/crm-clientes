@@ -1082,13 +1082,54 @@ def limpiar_unificar():
         return err("Empresa destino no encontrada", 404)
 
     ok_count = err_count = 0
+    aliases_reporte_total = {
+        "aliases_creados": 0,
+        "aliases_migrados": 0,
+        "aliases_existentes_destino": 0,
+        "aliases_conflictos": 0,
+    }
     for origen in origenes:
         if origen == destino: continue
+
+        # Preservar aliases antes de unificar
+        reporte_aliases = {
+            "aliases_creados": 0,
+            "aliases_migrados": 0,
+            "aliases_existentes_destino": 0,
+            "aliases_conflictos": 0,
+            "aliases_error": None,
+        }
+        try:
+            empresa_origen = db.obtener_empresa_por_id(origen)
+            nombre_origen = (empresa_origen or {}).get("nombre")
+            if nombre_origen:
+                try:
+                    res_alias = db.agregar_alias_empresa(
+                        empresa_id=destino,
+                        alias=nombre_origen,
+                        origen="merge",
+                        confianza=1.0,
+                    )
+                    if res_alias.get("action") == "created":
+                        reporte_aliases["aliases_creados"] = 1
+                except (AliasValidationError, EmpresaNotFoundError, AliasConflictError) as e:
+                    reporte_aliases["aliases_error"] = str(e)
+
+            res_mig = db.migrar_aliases_empresa(origen_id=origen, destino_id=destino)
+            reporte_aliases["aliases_migrados"]           = res_mig.get("migrados", 0)
+            reporte_aliases["aliases_existentes_destino"] = res_mig.get("existentes_destino", 0)
+            reporte_aliases["aliases_conflictos"]         = res_mig.get("conflictos", 0)
+        except Exception as e:
+            reporte_aliases["aliases_error"] = str(e)
+
+        for k in ("aliases_creados", "aliases_migrados", "aliases_existentes_destino", "aliases_conflictos"):
+            aliases_reporte_total[k] += reporte_aliases[k]
+
         ok2 = db.unificar_empresas(origen, destino)
         if ok2: ok_count += 1
         else:   err_count += 1
 
-    return ok({"fusionadas": ok_count, "errores": err_count})
+    return ok({"fusionadas": ok_count, "errores": err_count, **aliases_reporte_total})
 
 
 @app.route("/api/limpiar/renombrar", methods=["POST"])
