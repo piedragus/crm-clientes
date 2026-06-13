@@ -88,9 +88,11 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
                user-select:none;white-space:nowrap;font-weight:600;font-size:11px}
 #list-table th:hover{background:#1E293B}
 #list-table td{padding:6px 8px;border-bottom:1px solid var(--border)}
-#list-table tr{cursor:pointer;transition:background .1s}
+#list-table tr{cursor:pointer;contain:layout style}
 #list-table tr:hover td{background:#EFF6FF}
 #list-table tr.selected td{background:#DBEAFE}
+#list-table tr.multi-selected td{background:#FEF08A}
+#list-table tr.multi-selected.selected td{background:#DBEAFE}
 #list-table tr.row-g td{background:var(--row-g)}
 #list-table tr.row-a td{background:var(--row-a)}
 #list-table tr.row-r td{background:var(--row-r)}
@@ -516,6 +518,9 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
         <button class="btn btn-ghost" id="pg-prev" onclick="prevPage()" style="padding:3px 8px">◀</button>
         <span id="pg-label"></span>
         <button class="btn btn-ghost" id="pg-next" onclick="nextPage()" style="padding:3px 8px">▶</button>
+        <span id="multi-sel-info" style="display:none;margin-left:12px;font-size:11px;color:var(--muted)"></span>
+        <button class="btn btn-danger" id="btn-del-multi" onclick="delMultiEmpresas()" style="display:none;font-size:11px;padding:3px 10px">Eliminar seleccionadas</button>
+        <button class="btn btn-ghost" id="btn-clear-multi" onclick="clearMultiSel()" style="display:none;font-size:11px;padding:3px 10px">✕ Limpiar</button>
       </div>
     </div>
 
@@ -835,7 +840,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
   </div>
 
   <!-- Duplicados -->
-  <div class="modal" id="dupes-modal" style="display:none;width:840px;max-width:96vw">
+  <div class="modal" id="dupes-modal" style="display:none;width:900px;max-width:96vw">
     <div class="modal-header">
       <span>Duplicados</span>
       <div style="display:flex;align-items:center;gap:8px;margin-left:16px">
@@ -850,7 +855,10 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     <div class="modal-body" style="padding:0">
       <div style="max-height:380px;overflow:auto">
         <table class="sub-table" style="width:100%">
-          <thead><tr><th>Empresa A</th><th>Empresa B</th><th>Similitud</th><th></th></tr></thead>
+          <thead><tr>
+            <th style="width:32px"><input type="checkbox" id="chk-all-dupes" onchange="if(this.checked)selectAllDupes();else{document.querySelectorAll('.dupe-chk').forEach(c=>c.checked=false);updateDupesUI();}"></th>
+            <th>Empresa A</th><th>Empresa B</th><th>Similitud</th><th>Dirección</th>
+          </tr></thead>
           <tbody id="dupes-body"></tbody>
         </table>
       </div>
@@ -858,6 +866,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     <div class="modal-footer">
       <span id="dupes-status" style="color:var(--muted);font-size:11px;margin-right:auto"></span>
       <button class="btn btn-ghost" onclick="closeModal('dupes-modal')">Cerrar</button>
+      <button class="btn btn-warn" id="btn-merge-selected" onclick="mergeSelected()" disabled>Fusionar seleccionados</button>
     </div>
   </div>
 
@@ -1200,6 +1209,8 @@ const S = {
   selEmpresa: null, selContacto: null, selCotizacion: null,
   contactos: [], cotizaciones: [],
   aliases: [],
+  multiSel: new Set(),
+  lastClickedIdx: null,
   editMode: false,
   filters: {},
   histSel: null, histRows: [],
@@ -1235,6 +1246,15 @@ function toast(msg, type="ok") {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  // Event delegation para filas de empresas — un solo listener en lugar de N inline
+  const tbody = document.getElementById("list-body");
+  if (tbody) {
+    tbody.addEventListener("click", evt => {
+      const tr = evt.target.closest("tr[data-id]");
+      if (!tr) return;
+      handleEmpresaClick(evt, parseInt(tr.dataset.id));
+    });
+  }
   await Promise.all([loadStats(), loadEmpresas(), loadFilterMeta(),
                      loadActividadesRecientes()]);
 }
@@ -1325,12 +1345,14 @@ function renderList() {
   tbody.innerHTML = chunk.map(e => {
     const cls = e.ultima ? rowClass(e.ultima) : "row-n";
     const sel = S.selEmpresa && S.selEmpresa.id === e.id ? " selected" : "";
-    return `<tr class="${cls}${sel}" data-id="${e.id}" onclick="selectEmpresa(${e.id})">
+    const multiSel = S.multiSel && S.multiSel.has(e.id) ? " multi-selected" : "";
+    return `<tr class="${cls}${sel}${multiSel}" data-id="${e.id}">
       <td>${esc(e.nombre)}</td>
       <td>${esc(e.pais||"")}</td>
       <td>${esc(e.ultima||"")}</td>
       <td>${e.ncot||0}</td>
     </tr>`;
+  }).join("") || '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--muted)">Sin resultados</td></tr>';
   }).join("") || '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--muted)">Sin resultados</td></tr>';
 }
 
@@ -2039,23 +2061,79 @@ async function loadDupes() {
   const thresh = document.getElementById("dupes-thresh").value || 85;
   document.getElementById("dupes-status").textContent = "Buscando…";
   document.getElementById("dupes-body").innerHTML =
-    '<tr><td colspan="4" style="text-align:center;padding:16px"><div class="spinner"></div></td></tr>';
+    '<tr><td colspan="5" style="text-align:center;padding:16px"><div class="spinner"></div></td></tr>';
   const r = await GET(`/api/duplicados?umbral=${thresh}`);
   if (!r.ok) { toast(r.error||"Error","err"); return; }
   const pares = r.data;
   document.getElementById("dupes-status").textContent =
-    `${pares.length} par(es) encontrado(s)`;
+    `${pares.length} par(es) encontrado(s) — Seleccioná y usá "Fusionar seleccionados"`;
   document.getElementById("dupes-body").innerHTML = pares.map((p,i) => {
     const cls = p.similitud >= 90 ? "style='background:var(--row-g)'" : "style='background:var(--row-a)'";
-    return `<tr ${cls}>
-      <td>${esc(p.nombre1)}</td><td>${esc(p.nombre2)}</td>
+    return `<tr ${cls} data-idx="${i}" data-id1="${p.id1}" data-id2="${p.id2}"
+              data-nom1="${esc(p.nombre1)}" data-nom2="${esc(p.nombre2)}">
+      <td style="padding:4px 8px">
+        <input type="checkbox" class="dupe-chk" data-idx="${i}"
+               onchange="updateDupesUI()"
+               style="margin-right:4px">
+      </td>
+      <td>${esc(p.nombre1)}</td>
+      <td>${esc(p.nombre2)}</td>
       <td>${p.similitud}%</td>
-      <td style="display:flex;gap:4px;padding:4px 8px">
-        <button class="btn btn-warn" onclick="mergeEmpresas(${p.id1},'${esc(p.nombre1)}',${p.id2},'${esc(p.nombre2)}')" style="font-size:10px;padding:2px 8px">A→B</button>
-        <button class="btn btn-warn" onclick="mergeEmpresas(${p.id2},'${esc(p.nombre2)}',${p.id1},'${esc(p.nombre1)}')" style="font-size:10px;padding:2px 8px">B→A</button>
+      <td style="padding:4px 8px">
+        <select class="dupe-dir" data-idx="${i}"
+                style="font-size:10px;border:1px solid var(--border);border-radius:3px;padding:1px 4px;background:var(--bg)">
+          <option value="1to2">A → B</option>
+          <option value="2to1">B → A</option>
+        </select>
       </td>
     </tr>`;
-  }).join("") || '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--muted)">Sin duplicados ✓</td></tr>';
+  }).join("") || '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--muted)">Sin duplicados ✓</td></tr>';
+  updateDupesUI();
+}
+
+function updateDupesUI() {
+  const checked = document.querySelectorAll(".dupe-chk:checked").length;
+  const btnMerge = document.getElementById("btn-merge-selected");
+  if (btnMerge) {
+    btnMerge.disabled = checked === 0;
+    btnMerge.textContent = checked > 0 ? `Fusionar ${checked} seleccionado${checked>1?"s":""}` : "Fusionar seleccionados";
+  }
+}
+
+function selectAllDupes() {
+  document.querySelectorAll(".dupe-chk").forEach(c => c.checked = true);
+  updateDupesUI();
+}
+
+async function mergeSelected() {
+  const checks = [...document.querySelectorAll(".dupe-chk:checked")];
+  if (checks.length === 0) return;
+  if (!confirm(`¿Fusionar ${checks.length} par(es) de empresas?\nEsta acción no se puede deshacer.`)) return;
+
+  // Agrupar por destino -> batch request por destino (un solo POST por grupo)
+  const byDestino = new Map();
+  for (const chk of checks) {
+    const idx = chk.dataset.idx;
+    const row = document.querySelector(`tr[data-idx="${idx}"]`);
+    const dir = document.querySelector(`.dupe-dir[data-idx="${idx}"]`).value;
+    const id1 = parseInt(row.dataset.id1), id2 = parseInt(row.dataset.id2);
+    const [origen, destino] = dir === "1to2" ? [id1, id2] : [id2, id1];
+    if (!byDestino.has(destino)) byDestino.set(destino, []);
+    byDestino.get(destino).push(origen);
+  }
+
+  let fusionadas = 0, errores = 0;
+  for (const [destino_id, origen_ids] of byDestino) {
+    try {
+      const r = await POST("/api/limpiar/unificar", { destino_id, origen_ids });
+      if (r.ok) fusionadas += r.data?.fusionadas ?? origen_ids.length;
+      else errores += origen_ids.length;
+    } catch { errores += origen_ids.length; }
+  }
+
+  toast(`Fusionadas: ${fusionadas}${errores ? ` | Errores: ${errores}` : ""}`);
+  await Promise.all([loadEmpresas(), loadStats()]);
+  loadDupes();
 }
 
 async function mergeEmpresas(origenId, origenNom, destinoId, destinoNom) {
@@ -3226,6 +3304,94 @@ document.addEventListener("click", e => {
 function esc(s) {
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")
                       .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ── Selección múltiple de empresas ───────────────────────────────────────────
+function handleEmpresaClick(evt, id) {
+  const chunk = S.filtered.slice(S.page * S.pageSize, (S.page + 1) * S.pageSize);
+
+  if (evt.shiftKey && S.lastClickedIdx !== null) {
+    // Shift+click: seleccionar rango
+    const clickedIdx = chunk.findIndex(e => e.id === id);
+    if (clickedIdx === -1) return;
+    const from = Math.min(S.lastClickedIdx, clickedIdx);
+    const to   = Math.max(S.lastClickedIdx, clickedIdx);
+    chunk.slice(from, to + 1).forEach(e => S.multiSel.add(e.id));
+    renderEmpresas();
+    updateMultiSelUI();
+    return;
+  }
+
+  if (evt.ctrlKey || evt.metaKey) {
+    // Ctrl+click: toggle individual
+    const idx = chunk.findIndex(e => e.id === id);
+    if (S.multiSel.has(id)) {
+      S.multiSel.delete(id);
+    } else {
+      S.multiSel.add(id);
+      S.lastClickedIdx = idx;
+    }
+    renderEmpresas();
+    updateMultiSelUI();
+    return;
+  }
+
+  // Click normal: limpiar multisel y seleccionar empresa
+  if (S.multiSel.size > 0) {
+    S.multiSel.clear();
+    updateMultiSelUI();
+  }
+  const idx = chunk.findIndex(e => e.id === id);
+  S.lastClickedIdx = idx;
+  selectEmpresa(id);
+}
+
+function updateMultiSelUI() {
+  const n = S.multiSel.size;
+  const info  = document.getElementById("multi-sel-info");
+  const btnDel = document.getElementById("btn-del-multi");
+  const btnClr = document.getElementById("btn-clear-multi");
+  if (n > 0) {
+    info.style.display  = "";
+    btnDel.style.display = "";
+    btnClr.style.display = "";
+    info.textContent = `${n} empresa${n > 1 ? "s" : ""} seleccionada${n > 1 ? "s" : ""}`;
+  } else {
+    info.style.display  = "none";
+    btnDel.style.display = "none";
+    btnClr.style.display = "none";
+  }
+}
+
+function clearMultiSel() {
+  S.multiSel.clear();
+  S.lastClickedIdx = null;
+  renderEmpresas();
+  updateMultiSelUI();
+}
+
+async function delMultiEmpresas() {
+  const ids = [...S.multiSel];
+  if (ids.length === 0) return;
+  if (!confirm(`¿Eliminar ${ids.length} empresa${ids.length > 1 ? "s" : ""} y todos sus datos?\nEsta acción no se puede deshacer.`)) return;
+
+  let ok = 0, err = 0;
+  for (const id of ids) {
+    const r = await DEL(`/api/empresas/${id}`);
+    if (r.ok) ok++; else err++;
+  }
+
+  S.multiSel.clear();
+  S.lastClickedIdx = null;
+  if (S.selEmpresa && ids.includes(S.selEmpresa.id)) {
+    S.selEmpresa = null;
+    document.getElementById("detail-panel").style.display = "none";
+    document.getElementById("placeholder").style.display  = "";
+  }
+
+  updateMultiSelUI();
+  await Promise.all([loadEmpresas(), loadStats()]);
+  toast(`Eliminadas: ${ok}${err ? ` | Errores: ${err}` : ""}`);
 }
 
 // ── Aliases de empresa ────────────────────────────────────────────────────────
