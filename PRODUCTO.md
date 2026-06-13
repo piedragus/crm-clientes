@@ -162,7 +162,30 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 
 ---
 
-### 🔜 Sprint F — Features comerciales (por definir)
+### 🔜 Sprint F — Recorridos comerciales *(idea en maduración técnica)*
+*Requiere definición + APIs externas*
+
+Inspirado en el flujo del Gem de Gemini para planificación de visitas. La idea es integrar dentro del CRM la capacidad de armar recorridos optimizados usando la base de empresas existente.
+
+**Features candidatas:**
+- Campos `latitud` / `longitud` en empresas (o geocodificación desde dirección)
+- Estados de visita: Confirmado / Dudoso / Cerrado / No relevante / Prospecto nuevo
+- Campo `prioridad_visita`: Alta / Media / Baja
+- Módulo recorridos: punto de inicio + punto final + paradas fijas opcionales → orden optimizado
+- Registro de feedback post-visita (resultado, próxima acción, contacto)
+- Búsqueda de prospectos nuevos por zona (Google Places API)
+
+**Dependencias externas:**
+- Google Maps / Places API (geocodificación + búsqueda de prospectos) — tiene costo por volumen
+- Geocodificación masiva de ~2.786 empresas existentes — puede hacerse via Gem de Gemini como paso previo, exportando lat/lng para importar al CRM
+
+**Estado actual:**
+- Cubierto temporalmente por un Gem de Gemini con acceso a planilla de clientes por zona
+- El Gem puede usarse para enriquecer las empresas existentes con lat/lng y estado de visita, y luego importar esos datos al CRM como alimentación inicial
+
+**No arrancar hasta:** tener Sprint D (staging) funcionando, para poder importar el enriquecimiento del Gem de forma controlada y reversible.
+
+### 🔜 Sprint G — Features comerciales (por definir)
 *Ideas candidatas, sin priorizar*
 
 - Recordatorios y follow-ups automáticos
