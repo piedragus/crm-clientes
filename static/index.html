@@ -88,7 +88,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
                user-select:none;white-space:nowrap;font-weight:600;font-size:11px}
 #list-table th:hover{background:#1E293B}
 #list-table td{padding:6px 8px;border-bottom:1px solid var(--border)}
-#list-table tr{cursor:pointer;transition:background .1s}
+#list-table tr{cursor:pointer;contain:layout style}
 #list-table tr:hover td{background:#EFF6FF}
 #list-table tr.selected td{background:#DBEAFE}
 #list-table tr.multi-selected td{background:#FEF08A}
@@ -1246,6 +1246,15 @@ function toast(msg, type="ok") {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  // Event delegation para filas de empresas — un solo listener en lugar de N inline
+  const tbody = document.getElementById("list-body");
+  if (tbody) {
+    tbody.addEventListener("click", evt => {
+      const tr = evt.target.closest("tr[data-id]");
+      if (!tr) return;
+      handleEmpresaClick(evt, parseInt(tr.dataset.id));
+    });
+  }
   await Promise.all([loadStats(), loadEmpresas(), loadFilterMeta(),
                      loadActividadesRecientes()]);
 }
@@ -1337,8 +1346,7 @@ function renderList() {
     const cls = e.ultima ? rowClass(e.ultima) : "row-n";
     const sel = S.selEmpresa && S.selEmpresa.id === e.id ? " selected" : "";
     const multiSel = S.multiSel && S.multiSel.has(e.id) ? " multi-selected" : "";
-    return `<tr class="${cls}${sel}${multiSel}" data-id="${e.id}"
-      onclick="handleEmpresaClick(event,${e.id})">
+    return `<tr class="${cls}${sel}${multiSel}" data-id="${e.id}">
       <td>${esc(e.nombre)}</td>
       <td>${esc(e.pais||"")}</td>
       <td>${esc(e.ultima||"")}</td>
