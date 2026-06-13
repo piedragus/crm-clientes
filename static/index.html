@@ -1338,8 +1338,7 @@ function renderList() {
     const sel = S.selEmpresa && S.selEmpresa.id === e.id ? " selected" : "";
     const multiSel = S.multiSel && S.multiSel.has(e.id) ? " multi-selected" : "";
     return `<tr class="${cls}${sel}${multiSel}" data-id="${e.id}"
-      onclick="handleEmpresaClick(event,${e.id})"
-      oncontextmenu="handleEmpresaRightClick(event,${e.id})">
+      onclick="handleEmpresaClick(event,${e.id})">
       <td>${esc(e.nombre)}</td>
       <td>${esc(e.pais||"")}</td>
       <td>${esc(e.ultima||"")}</td>
@@ -2103,18 +2102,28 @@ async function mergeSelected() {
   if (checks.length === 0) return;
   if (!confirm(`¿Fusionar ${checks.length} par(es) de empresas?\nEsta acción no se puede deshacer.`)) return;
 
-  let ok = 0, err = 0;
+  // Agrupar por destino -> batch request por destino (un solo POST por grupo)
+  const byDestino = new Map();
   for (const chk of checks) {
     const idx = chk.dataset.idx;
     const row = document.querySelector(`tr[data-idx="${idx}"]`);
     const dir = document.querySelector(`.dupe-dir[data-idx="${idx}"]`).value;
     const id1 = parseInt(row.dataset.id1), id2 = parseInt(row.dataset.id2);
     const [origen, destino] = dir === "1to2" ? [id1, id2] : [id2, id1];
-    const r = await POST("/api/duplicados/merge", {origen_id: origen, destino_id: destino});
-    if (r.ok) ok++; else err++;
+    if (!byDestino.has(destino)) byDestino.set(destino, []);
+    byDestino.get(destino).push(origen);
   }
 
-  toast(`Fusionados: ${ok}${err ? ` | Errores: ${err}` : ""}`);
+  let fusionadas = 0, errores = 0;
+  for (const [destino_id, origen_ids] of byDestino) {
+    try {
+      const r = await POST("/api/limpiar/unificar", { destino_id, origen_ids });
+      if (r.ok) fusionadas += r.data?.fusionadas ?? origen_ids.length;
+      else errores += origen_ids.length;
+    } catch { errores += origen_ids.length; }
+  }
+
+  toast(`Fusionadas: ${fusionadas}${errores ? ` | Errores: ${errores}` : ""}`);
   await Promise.all([loadEmpresas(), loadStats()]);
   loadDupes();
 }
@@ -3327,18 +3336,6 @@ function handleEmpresaClick(evt, id) {
   const idx = chunk.findIndex(e => e.id === id);
   S.lastClickedIdx = idx;
   selectEmpresa(id);
-}
-
-function handleEmpresaRightClick(evt, id) {
-  evt.preventDefault();
-  // Right-click: toggle sin perder selección actual
-  if (S.multiSel.has(id)) {
-    S.multiSel.delete(id);
-  } else {
-    S.multiSel.add(id);
-  }
-  renderEmpresas();
-  updateMultiSelUI();
 }
 
 function updateMultiSelUI() {
