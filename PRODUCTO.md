@@ -1,0 +1,196 @@
+# CRM Clientes — Especificación de Producto y Roadmap
+
+**Repo:** `github.com/piedragus/crm-clientes`
+**Stack:** Python / Flask / SQLite / HTML+CSS+JS
+**Estado actual:** `develop` @ `07220f2` — Sprint B mergeado, listo para QA manual antes de `main`
+
+---
+
+## ¿Qué es este producto?
+
+CRM de ventas industriales para gestionar el ciclo comercial completo: desde el primer contacto hasta el seguimiento post-cotización. Está diseñado para una operación donde el volumen de cotizaciones históricas es grande (13.000+ PDFs) y la relación con cada cliente se construye a lo largo de múltiples proyectos y proveedores.
+
+**Usuario principal:** equipo comercial de ventas industriales.
+**No es:** un ERP, un sistema de facturación, ni un CRM genérico tipo Salesforce.
+
+---
+
+## Datos actuales en producción
+
+| Entidad | Cantidad |
+|---------|----------|
+| Empresas | ~2.786 |
+| Contactos | ~1.325 |
+| Cotizaciones importadas | ~12.676 |
+| PDFs fuente | ~13.193 |
+
+---
+
+## Características implementadas
+
+### Módulo Empresas
+- [x] CRUD completo (crear, editar, eliminar)
+- [x] Lista paginada server-side con búsqueda y filtros (país, rubro, tags)
+- [x] Vista de detalle con tabs: Empresa / Cotizaciones / Actividad
+- [x] Tags por empresa
+- [x] Campo país y rubro
+- [x] **Aliases** — nombres alternativos normalizados para resolución en importaciones y unificación (Sprint B)
+- [x] Unificación de empresas duplicadas (merge con preservación de aliases)
+
+### Módulo Contactos
+- [x] CRUD de contactos por empresa
+- [x] Campos: nombre, email, teléfono, país, cargo
+
+### Módulo Cotizaciones
+- [x] Listado por empresa con monto, moneda, fecha, proveedor
+- [x] Import desde PDFs (extracción básica de metadatos)
+- [x] Deduplicación por hash SHA256
+
+### Módulo Pipeline / Oportunidades
+- [x] Vista tabla con etapas: Prospecto → Cotizado → Negociación → Ganado / Perdido
+- [x] Separación venta / posventa
+- [x] Cambio de etapa inline
+
+### Módulo Actividad
+- [x] Timeline de notas y actividades por empresa
+- [x] Tipos: llamada, reunión, email, nota, tarea
+
+### Dashboard
+- [x] Cotizaciones por mes (barras CSS)
+- [x] Top empresas por monto
+- [x] Pipeline por etapa
+- [x] Métricas globales (stat cards interactivos)
+
+### Importador
+- [x] Importador masivo desde carpeta raíz (estructura `País/Cliente/archivo.pdf`)
+- [x] Importador por subcarpetas seleccionables
+- [x] Detección de país desde estructura de carpetas
+- [x] Detección de nombre de empresa desde carpeta padre
+- [x] Normalización de acentos y caracteres especiales
+- [x] Skip de carpetas genéricas (`GENERIC_FOLDERS`)
+- [x] Resolución por alias antes de crear empresa nueva (Sprint B)
+- [x] Backup automático antes de cada importación
+
+### Herramientas / Admin
+- [x] Limpiar y unificar duplicados (fuzzy matching)
+- [x] Renombrar empresa
+- [x] Preview de duplicados antes de acción
+- [x] Verificación de instalación de dependencias
+- [x] Backup manual
+
+---
+
+## Deuda técnica conocida
+
+| Item | Severidad | Sprint |
+|------|-----------|--------|
+| `fuzzywuzzy` → migrar a `rapidfuzz` | Media | C |
+| `importer/` como módulo monolítico en `server.py` | Media | C |
+| Sin staging de importaciones (no hay rollback por lote) | Alta | D |
+| Extracción de PDF básica (solo metadatos de carpeta) | Alta | E |
+| `jsonify(...)` directo mezclado con `err(...)` en aliases | Baja | limpieza futura |
+| 5 tests fallando por `fuzzywuzzy` no instalado | Baja | C |
+
+---
+
+## Roadmap
+
+### ✅ Sprint A — MVP + importación masiva
+*Mergeado a `main`*
+
+- CRUD empresas, contactos, cotizaciones
+- Importador masivo de 13.000 PDFs
+- Pipeline / oportunidades
+- Dashboard con métricas
+- Sistema de unificación de duplicados
+- 511 tests
+
+---
+
+### ✅ Sprint B — Aliases de empresas
+*Mergeado a `develop` @ `07220f2`*
+
+- Tabla `empresa_aliases` con normalización (tildes, sufijos legales, case)
+- Métodos DB: agregar, buscar, listar, eliminar, migrar aliases
+- Endpoints: `GET/POST/DELETE /api/empresas/:id/aliases`
+- UI: sección aliases dentro del tab Empresa
+- Importadores resuelven por alias antes de crear empresa nueva (cache, sin N+1)
+- Al unificar: nombre origen se guarda como alias de la empresa destino
+- 522 tests, 517 OK
+
+**Pendiente antes de merge a `main`:** QA manual
+1. Agregar/borrar alias desde UI
+2. Importar PDF con carpeta que matchea por alias
+3. Unificar dos empresas y verificar aliases resultantes
+
+---
+
+### 🔜 Sprint C — Refactor importer + rapidfuzz
+*Próximo*
+
+- Extraer lógica de importación de `server.py` a package `importer/`
+  - `importer/__init__.py`
+  - `importer/scanner.py` — escaneo de archivos
+  - `importer/resolver.py` — resolución empresa/país
+  - `importer/normalizer.py` — normalización de nombres (unificar con `utils/normalizacion.py`)
+  - `importer/constants.py` — `GENERIC_FOLDERS`, extensiones, etc.
+- Reemplazar `fuzzywuzzy` por `rapidfuzz` (misma API, mejor performance)
+- Eliminar los 5 tests fallando por `fuzzywuzzy`
+- Sin cambios de comportamiento visible para el usuario
+
+---
+
+### 🔜 Sprint D — Staging de importaciones
+*Requiere Sprint C*
+
+- Tablas nuevas: `import_batches`, `import_items`
+- Flujo: escanear → staging → revisar → confirmar → aplicar
+- Rollback por lote: deshacer una importación completa
+- Preview de qué se va a crear/modificar antes de confirmar
+- Historial de lotes importados en UI
+
+---
+
+### 🔜 Sprint E — Extracción avanzada de PDF
+*Requiere Sprint D*
+
+- Extraer texto real del PDF (pdfplumber / pdfminer)
+- Parsear: número de cotización, monto, moneda, proveedor, fecha desde el contenido
+- Enriquecimiento con IA (Gemini / GPT) para campos no estructurados
+- Confianza de extracción por campo
+- Revisión manual de campos de baja confianza en UI
+
+---
+
+### 🔜 Sprint F — Features comerciales (por definir)
+*Ideas candidatas, sin priorizar*
+
+- Recordatorios y follow-ups automáticos
+- Filtro "empresas sin actividad en X días"
+- Exportación a Excel / CSV del pipeline
+- Búsqueda global (empresas + cotizaciones + contactos)
+- Vista calendario de actividades
+- Indicadores de conversión por etapa del pipeline
+- Multi-usuario / roles (solo si el equipo crece)
+
+---
+
+## Principios de diseño
+
+- **Sales tool, not config tool** — la interfaz principal es el flujo comercial. Las herramientas admin van en Herramientas, no en el sidebar.
+- **Stat cards interactivos** — los números del dashboard llevan a las listas filtradas, no son solo display.
+- **Sidebar operacional** — solo acciones del día a día, sin configuración.
+- **Sin over-engineering** — SQLite es suficiente para el volumen actual. No agregar Redis, Celery, ni microservicios hasta que haya necesidad real.
+- **Branch strategy:** `feature/*` → `develop` → `main`. Peer review entre GPT (code review) y Claude (implementación + git).
+
+---
+
+## Contexto técnico para onboarding de IAs
+
+- `server.py` — Flask app monolítica, ~1.900 líneas. Todas las rutas y lógica de negocio.
+- `db_manager.py` — DBManager con conexiones SQLite thread-safe. Todos los métodos de DB.
+- `static/index.html` — SPA de ~3.200 líneas. Estado global en objeto `S`. Sin framework JS.
+- `utils/` — package con `utils_legacy.py` (Config, BackupManager, Exportador, CSVCleaner), `normalizacion.py`, `excepciones.py`.
+- `test_suite.py` — 522 tests unitarios e integración.
+- `pruebas_stress.py` / `pruebas_http_stress.py` — suites de stress y endpoints HTTP.
+- GitHub push requiere: `git remote set-url origin https://[TOKEN]@github.com/piedragus/crm-clientes.git`
