@@ -162,7 +162,39 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 
 ---
 
-### 🔜 Sprint F — Recorridos comerciales *(idea en maduración técnica)*
+### 🔜 Sprint F — Watcher de carpeta OneDrive
+*Requiere Sprint C (para tener entry point de importación por archivo único)*
+
+Proceso Python con `watchdog` que detecta PDFs nuevos en la carpeta de OneDrive en tiempo real y los importa automáticamente al CRM.
+
+**Features:**
+- Proceso en consola (no Windows Service), arranca con `.bat`
+- Detecta eventos `ON_CREATED` / `ON_MOVED` sobre la raíz de OneDrive
+- Reutiliza importer refactorizado (Sprint C) + alias resolution (Sprint B)
+- Deduplicación por `file_sha256` (sin reimportar lo ya conocido)
+- Notificaciones en el CRM al llegar PDFs nuevos (badge / toast)
+
+**Carpetas excluidas** (sincronizar con `GENERIC_FOLDERS` del importer):
+- `00 COTIZACIONES TIPO DE MAQ` — plantillas por tipo de máquina
+- `AA CODIGO DE MAQUINAS` — códigos internos
+- `AAA PARTES DE MAQ` — partes y repuestos
+- `ALAMBRES- BARRAS` — catálogos de producto
+- `MANUAL` / `MANUAL MAQUINA` — manuales técnicos
+- `FOTOS*` — imágenes
+- `Estructura` — hojas membretadas
+- `Prearmados de Maquinas` — plantillas de armado
+
+**Decisión técnica pendiente:** verificar si el importer (post Sprint C) expone un entry point por archivo único (`import_single_file(path)`) o solo procesa directorios. Define si hay que wrappear o refactorizar antes de arrancar este sprint.
+
+**Componentes planificados:**
+- `watcher/watcher_service.py` — loop principal watchdog
+- `watcher/watcher_config.py` — ruta base, filtros, carpetas excluidas
+- `watcher/watcher_handler.py` — extrae país/empresa/filename, llama al importer
+- `watcher/run_watcher.bat` — launcher Windows con activación de venv
+
+---
+
+### 🔜 Sprint G — Recorridos comerciales *(idea en maduración técnica)*
 *Requiere definición + APIs externas*
 
 Inspirado en el flujo del Gem de Gemini para planificación de visitas. La idea es integrar dentro del CRM la capacidad de armar recorridos optimizados usando la base de empresas existente.
@@ -185,7 +217,47 @@ Inspirado en el flujo del Gem de Gemini para planificación de visitas. La idea 
 
 **No arrancar hasta:** tener Sprint D (staging) funcionando, para poder importar el enriquecimiento del Gem de forma controlada y reversible.
 
-### 🔜 Sprint G — Features comerciales (por definir)
+---
+
+### 🔜 Sprint H — Unificación inteligente con LLM local *(concepto)*
+*Requiere Sprint D; LLM local (ollama) instalado*
+
+El fuzzy matching con rapidfuzz cubre bien los casos claros (~90%), pero la "zona gris" (score 60–85%) genera tanto falsos positivos como falsos negativos. Un LLM local corriendo en tarea nocturna puede resolver esos casos con criterio semántico real.
+
+**Problema que resuelve:**
+- "RENAULT PFA", "RenaultPFA", "renaultpfa3001" → mismo cliente, sin reglas hardcodeadas
+- Nombres con typos, abreviaturas, acentos mal codificados que el fuzzy no resuelve con certeza
+- Unificaciones de empresas duplicadas que hoy requieren revisión manual caso por caso
+
+**Arquitectura híbrida propuesta:**
+```
+Nombre de carpeta/archivo
+        ↓
+  normalize + rapidfuzz   ← rápido, cubre 90% de casos
+        ↓ (si score < umbral configurable)
+  LLM local (ollama)      ← solo para casos ambiguos
+        ↓
+  alias resolution (Sprint B)
+```
+
+**Flujo nocturno:**
+1. Detecta pares de empresas en zona gris (score rapidfuzz 60–85%)
+2. LLM evalúa: nombre, país, cotizaciones asociadas → ¿misma empresa?
+3. Propuestas van a tabla `unificacion_sugerida` (pendiente aprobación humana)
+4. UI de revisión en el CRM: aprobar / rechazar cada sugerencia al día siguiente
+
+**Ventajas de nocturno vs. tiempo real:**
+- Sin restricción de latencia (~1-3 seg/archivo con ollama es viable en batch)
+- Reprocesamiento de las ~2.786 empresas existentes posible
+- No bloquea el flujo normal de importación
+
+**Stack candidato:** `ollama` + `llama3` o `mistral` (local, sin costo por token)
+
+**Estado:** concepto aprobado, sin fecha. No arrancar antes de Sprint D.
+
+---
+
+### 🔜 Sprint I — Features comerciales (por definir)
 *Ideas candidatas, sin priorizar*
 
 - Recordatorios y follow-ups automáticos
