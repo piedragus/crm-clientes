@@ -289,3 +289,28 @@ Nombre de carpeta/archivo
 - `test_suite.py` — 522 tests unitarios e integración.
 - `pruebas_stress.py` / `pruebas_http_stress.py` — suites de stress y endpoints HTTP.
 - GitHub push requiere: `git remote set-url origin https://[TOKEN]@github.com/piedragus/crm-clientes.git`
+
+---
+
+## Integración con Sistema de Compras
+
+**Repo Compras:** `github.com/piedragus/Programa-compras`
+
+El Sistema de Compras gestiona el ciclo de aprovisionamiento (PI → OC → recepción → factura). El CRM gestiona el ciclo comercial (cotizaciones → oportunidades → ventas). El punto de contacto natural es: una venta confirmada en el CRM genera necesidad de compra.
+
+### Decisiones tomadas
+
+| Opción | Decisión |
+|--------|----------|
+| API REST entre los dos sistemas (cada uno expone endpoints, se llaman entre sí) | ✅ Implementar — cuando ambos sistemas estén estables |
+| Base de datos unificada (refactor mayor) | 🔜 Largo plazo — sin fecha, requiere madurez de ambos sistemas |
+| Base de datos compartida (SQLite compartida) | ❌ Descartado — riesgo de integridad |
+
+### Qué implicaría la integración API REST (opción elegida)
+
+- Empresa del CRM vinculada a proveedor/cliente del sistema de compras
+- Al cerrar oportunidad en CRM → generar PI automático en sistema de compras
+- Vista en CRM: OCs abiertas asociadas a un cliente
+- Vista en compras: origen comercial de cada OC
+
+**No arrancar hasta:** ambos sistemas estables con sus roadmaps propios completos.
