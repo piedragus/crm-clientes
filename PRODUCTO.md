@@ -257,6 +257,10 @@ Nombre de carpeta/archivo
 
 **Estado:** concepto aprobado, sin fecha. No arrancar antes de Sprint D.
 
+**Pendientes menores (no bloqueantes, surgidos del peer review de la sugerencia post-import):**
+- `sugerirLimpiezaSiHayDuplicados()` (en `develop` desde `b0497df`) hoy llama a `/api/limpiar/preview` sin acotar — compara TODAS las empresas entre sí (O(n²) con pre-filtro por longitud). Con la base actual (recién regenerada, chica) es instantáneo. Si la base crece a ~20k empresas, conviene cambiar a comparación M×N: solo las empresas recién creadas en esa importación contra el resto, no todo contra todo. Requeriría que los endpoints de importación devuelvan los IDs nuevos y un parámetro `nuevos_ids` en `/api/limpiar/preview`.
+- El aviso de duplicados depende hoy de un toast con timeout de 8s — si el usuario se distrae, se pierde. Evaluar un badge persistente (ej. en el dashboard, al lado del acceso a "Limpiar duplicados") respaldado por un flag simple (`hay_posibles_duplicados`) que se prenda al detectar duplicados en un import y se apague cuando el usuario abre/cierra el modal — evitando correr el fuzzy matching en cada render de la página principal.
+
 ---
 
 ### 🔜 Sprint I — Features comerciales (por definir)
