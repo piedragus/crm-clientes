@@ -1325,10 +1325,11 @@ def importar_subcarpetas():
     Archivos con nombre raro → sin_empresa:True, no se saltean.
     """
     b           = request.json or {}
-    path        = clean(b.get("path",""))
-    subcarpetas = b.get("subcarpetas", [])  # list of paths
-    lote        = max(1, min(to_int(b.get("lote", 500), 500), 500))
-    offset      = max(0, to_int(b.get("offset", 0), 0))
+    path          = clean(b.get("path",""))
+    subcarpetas   = b.get("subcarpetas", [])  # list of paths
+    lote          = max(1, min(to_int(b.get("lote", 500), 500), 500))
+    offset        = max(0, to_int(b.get("offset", 0), 0))
+    pais_override = clean(b.get("pais_override",""))  # país fijo para toda la importación
 
     if not path or not os.path.isdir(path):
         return err(f"Carpeta no encontrada: {path!r}")
@@ -1382,7 +1383,7 @@ def importar_subcarpetas():
         nombre_valido = (nombre and len(nombre.strip()) >= 2
                          and not _re.match(r'^\d+$', nombre.strip()))
 
-        pais = _detect_pais(folder_chain)
+        pais = pais_override or _detect_pais(folder_chain)
 
         if not nombre_valido:
             # No crear empresa fantasma — reportar y saltear

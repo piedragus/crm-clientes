@@ -922,7 +922,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
                   text-transform:uppercase;margin-bottom:6px">
         Importar por subcarpetas
       </div>
-      <div style="display:flex;gap:6px;margin-bottom:8px">
+      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
         <button class="btn btn-ghost" onclick="listarSubcarpetas()" id="btn-listar-sub">
           📂 Listar subcarpetas
         </button>
@@ -930,6 +930,9 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
                 id="btn-imp-sub" disabled>
           🚀 Importar seleccionadas
         </button>
+        <input id="sub-pais-override" placeholder="País (opcional, ej: Venezuela)"
+               style="margin-left:auto;width:200px;font-size:11px;padding:4px 8px;
+                      border:1px solid var(--border);border-radius:4px">
       </div>
       <div id="sub-list" style="max-height:200px;overflow-y:auto;
            border:1px solid var(--border);border-radius:4px;display:none">
@@ -1419,6 +1422,7 @@ function toggleEdit() {
   });
   document.getElementById("btn-edit").style.display = "none";
   document.getElementById("btn-save").style.display = "";
+  document.getElementById("btn-save").disabled = false;
   document.getElementById("detail-name").style.color = "var(--warn)";
   document.getElementById("detail-name").textContent = "Editando: " + S.selEmpresa.nombre;
 }
@@ -1433,6 +1437,7 @@ function cancelEdit() {
   });
   document.getElementById("btn-edit").style.display = "";
   document.getElementById("btn-save").style.display = "none";
+  document.getElementById("btn-save").disabled = true;
 }
 
 async function saveEmpresa() {
@@ -2368,6 +2373,7 @@ async function importarSubcarpetasSeleccionadas() {
   const selPaths = [...document.querySelectorAll(".sub-chk:checked")]
     .map(c => c.dataset.path);
   if (!selPaths.length) { toast("Seleccioná al menos una subcarpeta","err"); return; }
+  const paisOverride = document.getElementById("sub-pais-override").value.trim();
 
   document.getElementById("btn-imp-sub").disabled = true;
   document.getElementById("sub-progress").style.display = "";
@@ -2384,7 +2390,7 @@ async function importarSubcarpetasSeleccionadas() {
       `${totalImportados} importados`;
 
     const r = await POST("/api/importar/subcarpetas/importar", {
-      path, subcarpetas: selPaths, lote, offset
+      path, subcarpetas: selPaths, lote, offset, pais_override: paisOverride
     });
     if (!r.ok) { toast(r.error||"Error","err"); break; }
 
