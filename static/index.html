@@ -3350,7 +3350,7 @@ function handleEmpresaClick(evt, id) {
     const from = Math.min(S.lastClickedIdx, clickedIdx);
     const to   = Math.max(S.lastClickedIdx, clickedIdx);
     chunk.slice(from, to + 1).forEach(e => S.multiSel.add(e.id));
-    renderEmpresas();
+    renderList();
     updateMultiSelUI();
     return;
   }
@@ -3364,7 +3364,7 @@ function handleEmpresaClick(evt, id) {
       S.multiSel.add(id);
       S.lastClickedIdx = idx;
     }
-    renderEmpresas();
+    renderList();
     updateMultiSelUI();
     return;
   }
@@ -3399,7 +3399,7 @@ function updateMultiSelUI() {
 function clearMultiSel() {
   S.multiSel.clear();
   S.lastClickedIdx = null;
-  renderEmpresas();
+  renderList();
   updateMultiSelUI();
 }
 
