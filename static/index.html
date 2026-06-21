@@ -174,7 +174,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 .toast-item{padding:8px 14px;border-radius:6px;font-size:12px;
             color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.2);
             animation:slide-in .2s ease}
-.toast-ok{background:#16A34A}.toast-err{background:#DC2626}
+.toast-ok{background:#16A34A}.toast-err{background:#DC2626}.toast-warn{background:#D97706}
 .toast-info{background:var(--accent)}
 @keyframes slide-in{from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1}}
 
@@ -2289,6 +2289,7 @@ async function importarMasivo() {
 
     toast(`✓ ${d.cotizaciones_importadas} cotizaciones importadas, ${d.empresas_creadas} empresas creadas`);
     await Promise.all([loadEmpresas(), loadStats()]);
+    if (d.empresas_creadas > 0) await sugerirLimpiezaSiHayDuplicados();
 
   } catch(e) {
     clearInterval(ticker);
@@ -2474,6 +2475,25 @@ async function importarSubcarpetasSeleccionadas() {
 
   toast(`✓ ${totalImportados} importados | ${totalEmpresas} empresas creadas${totalSinEmp ? ` | ${totalSinEmp} sin empresa detectada (saltados)` : ""}`);
   await Promise.all([loadEmpresas(), loadStats()]);
+  if (totalEmpresas > 0) await sugerirLimpiezaSiHayDuplicados();
+}
+
+// ── Sugerencia de limpieza post-importación ──────────────────────────────────
+// Después de crear empresas nuevas en una importación masiva, chequea si el
+// fuzzy matching encuentra posibles duplicados (ej. "ACME"/"Acme Sa" creados
+// en tandas distintas) y ofrece abrir el modal de Limpiar duplicados directo,
+// en vez de dejarlos sueltos sin que nadie los revise.
+async function sugerirLimpiezaSiHayDuplicados(umbral = 90) {
+  const r = await GET(`/api/limpiar/preview?umbral=${umbral}`);
+  if (!r.ok || !Array.isArray(r.data) || r.data.length === 0) return;
+  const n = r.data.length;
+  const el = document.createElement("div");
+  el.className = "toast-item toast-warn";
+  el.style.cursor = "pointer";
+  el.textContent = `⚠ ${n} posible${n>1?"s":""} empresa${n>1?"s":""} duplicada${n>1?"s":""} detectada${n>1?"s":""} — click para revisar`;
+  el.onclick = () => { el.remove(); showLimpieza(); loadLimpieza(); };
+  document.getElementById("toast").appendChild(el);
+  setTimeout(() => el.remove(), 8000);
 }
 
 async function _doEscanear() {
@@ -2599,6 +2619,7 @@ async function doImportItems(items) {
     toast(`✓ ${d.importados} importado(s)${d.errores ? ` | ${d.errores} error(es)` : ""}`);
     await Promise.all([loadStats()]);
     if (S.selEmpresa) loadCotizaciones();
+    if (d.empresas_creadas > 0) await sugerirLimpiezaSiHayDuplicados();
   } catch(err) {
     hideProgress();
     toast("Error al importar","err");
