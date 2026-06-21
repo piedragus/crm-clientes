@@ -7,25 +7,13 @@ listas de strings y devuelven strings. Pensadas para ser reutilizadas
 tal cual por el watcher de OneDrive (Sprint E).
 """
 import re
-import unicodedata
 
-
-def normalizar_basico(s: str) -> str:
-    """Normaliza a minúsculas sin acentos para comparación simple.
-
-    No confundir con utils.normalizacion.normalizar_alias_empresa,
-    que además quita puntuación y sufijos legales (SA, SRL, etc.)
-    para matching de alias — esta función es más liviana, usada
-    para comparar nombres de carpeta contra listas conocidas
-    (países, GENERIC_FOLDERS).
-    """
-    return unicodedata.normalize("NFD", str(s or "").lower().strip()).encode(
-        "ascii", "ignore").decode()
+from .utils import normalizar_basico
+from .constants import GENERIC_FOLDERS, PAISES_CONOCIDOS_NORM
 
 
 def detect_pais(folder_chain: list) -> str:
     """Detecta país desde la cadena de carpetas (tolerante a tildes y mayúsculas)."""
-    from .constants import PAISES_CONOCIDOS_NORM
     for folder in folder_chain:
         key = normalizar_basico(folder)
         if key in PAISES_CONOCIDOS_NORM:
@@ -41,7 +29,6 @@ def extract_client_from_stem(stem: str) -> str:
 
 def get_client_name(folder_chain: list, filename_stem: str) -> str:
     """Walk folders deepest-first, skip generic ones; fallback to filename."""
-    from .constants import GENERIC_FOLDERS
     for folder in reversed(folder_chain):
         if folder.lower().strip() not in GENERIC_FOLDERS:
             return folder

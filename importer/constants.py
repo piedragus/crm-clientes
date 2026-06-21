@@ -10,7 +10,7 @@ IMPORT_EXTS: extensiones de archivo que el importador masivo procesa.
 PAISES_CONOCIDOS_NORM: diccionario {nombre_normalizado: forma_canónica}
 de países reconocidos automáticamente desde nombres de carpeta.
 """
-from .resolver import normalizar_basico
+from .utils import normalizar_basico
 
 GENERIC_FOLDERS = {
     'argentina', 'bolivia', 'chile', 'colombia', 'estados unidos', 'mexico',
