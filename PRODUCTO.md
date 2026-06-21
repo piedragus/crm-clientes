@@ -90,6 +90,7 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 | Extracción de PDF básica (solo metadatos de carpeta) | Alta | E |
 | `jsonify(...)` directo mezclado con `err(...)` en aliases | Baja | limpieza futura |
 | 5 tests fallando por `fuzzywuzzy` no instalado | Baja | C |
+| `pais_override` del importador por subcarpetas solo aplica a empresas **nuevas**, no actualiza país de empresas existentes sin país | Baja | pendiente — agregar checkbox explícito "aplicar también a empresas existentes sin país" en la UI antes de habilitarlo |
 
 ---
 
