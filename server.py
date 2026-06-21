@@ -1492,70 +1492,13 @@ def exportar():
 
 
 # ── Importador masivo inteligente ─────────────────────────────────────────────
-GENERIC_FOLDERS = {
-    'argentina','bolivia','chile','colombia','estados unidos','mexico',
-    'peru','uruguay','nicaragua','paraguay','ecuador','brasil',
-    'comercial','equipos','aspiradores','cabinas','pipe (tubos)',
-    'repuestos tolva','hojas membretadas especiales',
-    'pedidos presupuestos internacionales','datos de catalogo tolvas',
-    'tg 70','tg100','tg250','tg500',
-    'cartas','carta','cotizaciones','cotizacion','clientes','clientes x zona',
-    'planos','mantenimiento','nueva carpeta','mto','mto-2011','mto-2012',
-    'mto-2013','mto2011','a- representantes en el exterior',
-    '00 cotizaciones tipo de maq',
-    'enero 2011','febrero 2011','julio 2011','junio 2011','diciembre 2011',
-    'abril2011','noviembre-2011','agosto','mayo','2013',
-    '500p','800p','1000p','1000s','1200p','1200s','1500p','500s','600p','600s',
-    '6 ca','1 ca','1 cl','12 ca','147 m 20 hp','maquina nueva',
-    'aaa-con o sin competencia','aa cotizaciones e informes tipicas',
-}
-
-IMPORT_EXTS = {'.pdf','.docx','.xlsx','.doc','.xls','.pptx','.txt'}
-
-import unicodedata as _ucd
-
-def _norm(s: str) -> str:
-    """Normaliza a minúsculas sin acentos para comparación."""
-    return _ucd.normalize("NFD", str(s or "").lower().strip()).encode(
-        "ascii", "ignore").decode()
-
-PAISES_CONOCIDOS_NORM = {
-    _norm(k): v for k, v in {
-        "Argentina":"Argentina","Chile":"Chile","Bolivia":"Bolivia",
-        "Colombia":"Colombia","Perú":"Perú","Peru":"Perú",
-        "Uruguay":"Uruguay","Nicaragua":"Nicaragua","Paraguay":"Paraguay",
-        "Ecuador":"Ecuador","Brasil":"Brasil","Brazil":"Brasil",
-        "México":"México","Mexico":"México",
-        "Estados Unidos":"Estados Unidos","USA":"Estados Unidos",
-        "EEUU":"Estados Unidos",
-        "Venezuela":"Venezuela","Panamá":"Panamá","Panama":"Panamá",
-        "Guatemala":"Guatemala","Cuba":"Cuba","España":"España",
-        "Espana":"España","Dubai":"Dubai","Canadá":"Canadá",
-        "Canada":"Canadá","Australia":"Australia",
-    }.items()
-}
-
-def _detect_pais(folder_chain: list) -> str:
-    """Detecta país desde la cadena de carpetas (tolerante a tildes y mayúsculas)."""
-    for folder in folder_chain:
-        key = _norm(folder)
-        if key in PAISES_CONOCIDOS_NORM:
-            return PAISES_CONOCIDOS_NORM[key]
-    return ""
-
-
-def _extract_client_from_stem(stem):
-    """'ALBANESI02' → 'ALBANESI', 'Alejandro Garaggiola01' → 'Alejandro Garaggiola'"""
-    import re
-    name = re.sub(r'[\s_-]*\d+\s*$', '', stem).strip()
-    return name if name else stem
-
-def _get_client_name(folder_chain, filename_stem):
-    """Walk folders deepest-first, skip generic ones; fallback to filename."""
-    for folder in reversed(folder_chain):
-        if folder.lower().strip() not in GENERIC_FOLDERS:
-            return folder
-    return _extract_client_from_stem(filename_stem)
+from importer import (
+    GENERIC_FOLDERS, IMPORT_EXTS, PAISES_CONOCIDOS_NORM,
+    normalizar_basico as _norm,
+    detect_pais as _detect_pais,
+    extract_client_from_stem as _extract_client_from_stem,
+    get_client_name as _get_client_name,
+)
 
 
 @app.route("/api/importar/masivo", methods=["POST"])
