@@ -12,7 +12,7 @@ try:
 except Exception:
     pd = None
 try:
-    from thefuzz import fuzz
+    from rapidfuzz import fuzz
 except Exception:
     from difflib import SequenceMatcher
     class _FuzzFallback:

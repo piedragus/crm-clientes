@@ -749,10 +749,9 @@ class TestImportadorCarpetas(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    @unittest.skip("fuzzywuzzy no instalado — pendiente migración a rapidfuzz en Sprint C")
     def test_matching_nombre_carpeta_empresa(self):
         make_emp(self.db, "ACME Argentina")
-        from fuzzywuzzy import process
+        from rapidfuzz import process
         companies = self.db.fetchall("SELECT id, nombre FROM empresas")
         comp_names = [c['nombre'] for c in companies]
         hits = process.extract("ACME Argentina", comp_names, limit=1)
@@ -791,9 +790,8 @@ class TestImportadorCarpetas(unittest.TestCase):
                 if f.endswith('.pdf'): found.append(f)
         self.assertIn("profundo.pdf", found)
 
-    @unittest.skip("fuzzywuzzy no instalado — pendiente migración a rapidfuzz en Sprint C")
     def test_matching_fuzzy_umbral(self):
-        from fuzzywuzzy import fuzz
+        from rapidfuzz import fuzz
         pares = [
             ("ACME S.A.",          "ACME SA",            80),
             ("Empresa ABC SRL",    "Empresa ABC S.R.L.", 75),
@@ -804,9 +802,8 @@ class TestImportadorCarpetas(unittest.TestCase):
             self.assertGreater(sim, min_sim,
                 f"'{a}' vs '{b}': similitud {sim} < {min_sim}")
 
-    @unittest.skip("fuzzywuzzy no instalado — pendiente migración a rapidfuzz en Sprint C")
     def test_db_vacia_no_crashea(self):
-        from fuzzywuzzy import process
+        from rapidfuzz import process
         comp_names = []
         if comp_names:
             process.extract("Cualquier", comp_names, limit=1)
@@ -3334,10 +3331,9 @@ class TestTagsNormalizacion(unittest.TestCase):
         self.assertNotIn("viejo1", tags)
         self.assertEqual(len(tags), 3)
 
-    @unittest.skip("fuzzywuzzy no instalado — pendiente migración a rapidfuzz en Sprint C")
     def test_similar_empresas_con_acentos(self):
         """fuzz.ratio debe detectar ACME SA vs ÁCME SA como similares."""
-        from fuzzywuzzy import fuzz
+        from rapidfuzz import fuzz
         sim = fuzz.ratio("acme sa", "ácme sa")
         # Verificar que el umbral 75 los detectaría
         self.assertGreater(sim, 70,

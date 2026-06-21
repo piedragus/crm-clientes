@@ -11,7 +11,7 @@ from utils.excepciones import (
     AliasConflictError,
 )
 try:
-    from fuzzywuzzy import fuzz
+    from rapidfuzz import fuzz
 except Exception:
     from difflib import SequenceMatcher
     class _FuzzFallback:
@@ -772,7 +772,7 @@ class DBManager:
                     # Solo hacer el fuzzy si el umbral es bajo (< 70)
                     if umbral >= 70:
                         continue
-                similitud = fuzz.ratio(low1, low2)
+                similitud = int(round(fuzz.ratio(low1, low2)))
                 if similitud >= umbral:
                     duplicados.append({
                         "id1": id1, "nombre1": nom1,
