@@ -91,6 +91,7 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 | `jsonify(...)` directo mezclado con `err(...)` en aliases | Baja | limpieza futura |
 | 5 tests fallando por `fuzzywuzzy` no instalado | Baja | C |
 | `pais_override` del importador por subcarpetas solo aplica a empresas **nuevas**, no actualiza país de empresas existentes sin país | Baja | pendiente — agregar checkbox explícito "aplicar también a empresas existentes sin país" en la UI antes de habilitarlo |
+| `nombre` en `empresas` es `UNIQUE` case-sensitive en SQLite, pero el importador matchea por `nombre.lower()`: nombres con distinto casing ("ACME" vs "acme") generan **dos registros separados** en la DB (cada uno con su propio país), mientras el importador los trata como la misma empresa al asignar cotizaciones nuevas → cotizaciones se cuelgan de uno solo, el otro queda huérfano/duplicado en la práctica. Insertar el mismo nombre exacto (mismo casing) ya existente falla silenciosamente ("No se pudo crear") sin actualizar el país de la empresa existente | Alta | relacionado con Sprint H (dedupe) — evaluar `UNIQUE` con `COLLATE NOCASE` o normalizar nombre antes de insertar |
 
 ---
 
