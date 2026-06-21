@@ -10,6 +10,11 @@ from flask import Flask, request, jsonify, send_from_directory, Response, send_f
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from db_manager import DBManager
 from utils import Config, BackupManager, Exportador, formatear_fecha
+from utils.excepciones import (
+    AliasValidationError,
+    EmpresaNotFoundError,
+    AliasConflictError,
+)
 from config_export import get_app_config
 
 # ── Logging to file ───────────────────────────────────────────────────────────
@@ -951,6 +956,61 @@ def importar_empresas_desde_carpeta():
     })
 
 
+# ── Aliases de empresas ───────────────────────────────────────────────────────
+@app.route("/api/empresas/<int:empresa_id>/aliases", methods=["GET"])
+def api_get_aliases_empresa(empresa_id):
+    if not db.obtener_empresa_por_id(empresa_id):
+        return err("Empresa no encontrada", 404)
+    try:
+        data = db.get_aliases_empresa(empresa_id)
+        return jsonify({"ok": True, "data": data}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/empresas/<int:empresa_id>/aliases", methods=["POST"])
+def api_post_alias_empresa(empresa_id):
+    if not db.obtener_empresa_por_id(empresa_id):
+        return err("Empresa no encontrada", 404)
+    body = request.json or {}
+    alias_raw = (body.get("alias") or "").strip()
+    origen = body.get("origen") or "manual"
+    try:
+        confianza = float(body.get("confianza", 1.0))
+    except (TypeError, ValueError):
+        return err("confianza debe ser numérica", 400)
+    try:
+        resultado = db.agregar_alias_empresa(
+            empresa_id=empresa_id,
+            alias=alias_raw,
+            origen=origen,
+            confianza=confianza,
+        )
+        return jsonify({"ok": True, "data": resultado}), 201
+    except AliasValidationError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except EmpresaNotFoundError as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+    except AliasConflictError as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    except Exception:
+        return jsonify({"ok": False, "error": "Error interno inesperado."}), 500
+
+
+@app.route("/api/empresas/<int:empresa_id>/aliases/<int:alias_id>", methods=["DELETE"])
+def api_delete_alias_empresa(empresa_id, alias_id):
+    try:
+        eliminado = db.eliminar_alias_empresa(
+            alias_id=alias_id,
+            empresa_id=empresa_id,
+        )
+        if not eliminado:
+            return jsonify({"ok": False, "error": "Alias no encontrado."}), 404
+        return jsonify({"ok": True, "data": {"eliminado": True}}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── Limpieza y unificación post-importación ───────────────────────────────────
 @app.route("/api/limpiar/preview")
 def limpiar_preview():
@@ -1025,17 +1085,60 @@ def limpiar_unificar():
 
     if not destino: return err("destino_id es obligatorio")
     if not origenes: return err("origen_ids es obligatorio")
+    if destino in origenes:
+        return err("No se puede unificar una empresa consigo misma", 400)
     if not db.obtener_empresa_por_id(destino):
         return err("Empresa destino no encontrada", 404)
 
     ok_count = err_count = 0
+    aliases_reporte_total = {
+        "aliases_creados": 0,
+        "aliases_migrados": 0,
+        "aliases_existentes_destino": 0,
+        "aliases_conflictos": 0,
+    }
     for origen in origenes:
         if origen == destino: continue
+
+        # Preservar aliases antes de unificar
+        reporte_aliases = {
+            "aliases_creados": 0,
+            "aliases_migrados": 0,
+            "aliases_existentes_destino": 0,
+            "aliases_conflictos": 0,
+            "aliases_error": None,
+        }
+        try:
+            empresa_origen = db.obtener_empresa_por_id(origen)
+            nombre_origen = (empresa_origen or {}).get("nombre")
+            if nombre_origen:
+                try:
+                    res_alias = db.agregar_alias_empresa(
+                        empresa_id=destino,
+                        alias=nombre_origen,
+                        origen="merge",
+                        confianza=1.0,
+                    )
+                    if res_alias.get("action") == "created":
+                        reporte_aliases["aliases_creados"] = 1
+                except (AliasValidationError, EmpresaNotFoundError, AliasConflictError) as e:
+                    reporte_aliases["aliases_error"] = str(e)
+
+            res_mig = db.migrar_aliases_empresa(origen_id=origen, destino_id=destino)
+            reporte_aliases["aliases_migrados"]           = res_mig.get("migrados", 0)
+            reporte_aliases["aliases_existentes_destino"] = res_mig.get("existentes_destino", 0)
+            reporte_aliases["aliases_conflictos"]         = res_mig.get("conflictos", 0)
+        except Exception as e:
+            reporte_aliases["aliases_error"] = str(e)
+
+        for k in ("aliases_creados", "aliases_migrados", "aliases_existentes_destino", "aliases_conflictos"):
+            aliases_reporte_total[k] += reporte_aliases[k]
+
         ok2 = db.unificar_empresas(origen, destino)
         if ok2: ok_count += 1
         else:   err_count += 1
 
-    return ok({"fusionadas": ok_count, "errores": err_count})
+    return ok({"fusionadas": ok_count, "errores": err_count, **aliases_reporte_total})
 
 
 @app.route("/api/limpiar/renombrar", methods=["POST"])
@@ -1222,10 +1325,17 @@ def importar_subcarpetas():
     Archivos con nombre raro → sin_empresa:True, no se saltean.
     """
     b           = request.json or {}
-    path        = clean(b.get("path",""))
-    subcarpetas = b.get("subcarpetas", [])  # list of paths
-    lote        = max(1, min(to_int(b.get("lote", 500), 500), 500))
-    offset      = max(0, to_int(b.get("offset", 0), 0))
+    path          = clean(b.get("path",""))
+    subcarpetas   = b.get("subcarpetas", [])  # list of paths
+    lote          = max(1, min(to_int(b.get("lote", 500), 500), 500))
+    offset        = max(0, to_int(b.get("offset", 0), 0))
+    pais_override = clean(b.get("pais_override",""))  # país fijo para toda la importación
+    if pais_override:
+        norm_key = _norm(pais_override)
+        if norm_key not in PAISES_CONOCIDOS_NORM:
+            return err(f"País no reconocido: {pais_override!r}. "
+                       f"Usá uno de: {', '.join(sorted(set(PAISES_CONOCIDOS_NORM.values())))}")
+        pais_override = PAISES_CONOCIDOS_NORM[norm_key]  # forma canónica
 
     if not path or not os.path.isdir(path):
         return err(f"Carpeta no encontrada: {path!r}")
@@ -1239,6 +1349,12 @@ def importar_subcarpetas():
                       if r.get("ruta_archivo")}
     emp_by_nombre  = {e["nombre"].lower(): e["id"]
                       for e in db.fetchall("SELECT id, nombre FROM empresas")}
+
+    from utils.normalizacion import normalizar_alias_empresa as _norm_alias
+    alias_cache = {
+        row["alias_norm"]: row["empresa_id"]
+        for row in db.fetchall("SELECT alias_norm, empresa_id FROM empresa_aliases")
+    }
 
     crear_backup_seguro("antes_importar_subcarpetas")
 
@@ -1273,7 +1389,7 @@ def importar_subcarpetas():
         nombre_valido = (nombre and len(nombre.strip()) >= 2
                          and not _re.match(r'^\d+$', nombre.strip()))
 
-        pais = _detect_pais(folder_chain)
+        pais = pais_override or _detect_pais(folder_chain)
 
         if not nombre_valido:
             # No crear empresa fantasma — reportar y saltear
@@ -1288,7 +1404,12 @@ def importar_subcarpetas():
 
         nombre = nombre.strip()
 
-        eid = emp_by_nombre.get(nombre.lower())
+        # 1. Resolver por alias exacto normalizado (cache, sin N+1)
+        norm = _norm_alias(nombre)
+        eid = alias_cache.get(norm)
+        if not eid:
+            # 2. Flujo viejo: nombre exacto case-insensitive
+            eid = emp_by_nombre.get(nombre.lower())
         if not eid:
             ok2 = db.agregar_empresa(nombre, "", "", "", "", pais, "")
             if ok2:
@@ -1407,6 +1528,10 @@ PAISES_CONOCIDOS_NORM = {
         "México":"México","Mexico":"México",
         "Estados Unidos":"Estados Unidos","USA":"Estados Unidos",
         "EEUU":"Estados Unidos",
+        "Venezuela":"Venezuela","Panamá":"Panamá","Panama":"Panamá",
+        "Guatemala":"Guatemala","Cuba":"Cuba","España":"España",
+        "Espana":"España","Dubai":"Dubai","Canadá":"Canadá",
+        "Canada":"Canadá","Australia":"Australia",
     }.items()
 }
 
@@ -1459,6 +1584,12 @@ def importar_masivo():
     empresas_existentes = db.fetchall("SELECT id, nombre FROM empresas")
     emp_by_nombre = {e["nombre"].lower(): e["id"] for e in empresas_existentes}
 
+    from utils.normalizacion import normalizar_alias_empresa as _norm_alias
+    alias_cache = {
+        row["alias_norm"]: row["empresa_id"]
+        for row in db.fetchall("SELECT alias_norm, empresa_id FROM empresa_aliases")
+    }
+
     from datetime import datetime as _dt
     import re
 
@@ -1504,13 +1635,17 @@ def importar_masivo():
                 continue
 
             # Find or create empresa
-            eid = emp_by_nombre.get(client_name.lower())
+            # 1. Resolver por alias exacto normalizado (cache, sin N+1)
+            norm = _norm_alias(client_name)
+            eid = alias_cache.get(norm)
             if not eid:
-                # Try case-insensitive match
-                for en, eid_try in emp_by_nombre.items():
-                    if en == client_name.lower():
-                        eid = eid_try
-                        break
+                # 2. Flujo viejo: nombre exacto case-insensitive
+                eid = emp_by_nombre.get(client_name.lower())
+                if not eid:
+                    for en, eid_try in emp_by_nombre.items():
+                        if en == client_name.lower():
+                            eid = eid_try
+                            break
 
             if not eid:
                 # Create new empresa
