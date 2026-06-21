@@ -797,7 +797,7 @@ def escanear_carpeta():
     EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
 
     try:
-        from thefuzz import process as fz_process
+        from rapidfuzz import process as fz_process
     except ImportError:
         from difflib import SequenceMatcher
         class fz_process:
@@ -864,7 +864,7 @@ def escanear_carpeta():
         if comp_names:
             hits = fz_process.extract(src, comp_names, limit=1)
             if hits:
-                sugerida, sim = hits[0][0], hits[0][1]
+                sugerida, sim = hits[0][0], int(round(hits[0][1]))
                 eid = comp_by_name.get(sugerida) if sim >= thresh else None
 
         # Hash only if explicitly requested
@@ -1872,7 +1872,7 @@ def api_diagnostico():
 
 @app.route("/api/verificar")
 def api_verificar():
-    mods = ["flask","fuzzywuzzy","pandas","openpyxl","pdfplumber","docx","pptx","google.genai","openai"]
+    mods = ["flask","rapidfuzz","pandas","openpyxl","pdfplumber","docx","pptx","google.genai","openai"]
     dep  = {m: _safe_find_spec(m) for m in mods}
     cols = [r.get("name") for r in db.fetchall("PRAGMA table_info(cotizaciones)")]
     req  = ["moneda","resumen","proveedor_ia","estado_ia","error_ia","archivo_hash","fecha_importacion"]
