@@ -1330,6 +1330,12 @@ def importar_subcarpetas():
     lote          = max(1, min(to_int(b.get("lote", 500), 500), 500))
     offset        = max(0, to_int(b.get("offset", 0), 0))
     pais_override = clean(b.get("pais_override",""))  # país fijo para toda la importación
+    if pais_override:
+        norm_key = _norm(pais_override)
+        if norm_key not in PAISES_CONOCIDOS_NORM:
+            return err(f"País no reconocido: {pais_override!r}. "
+                       f"Usá uno de: {', '.join(sorted(set(PAISES_CONOCIDOS_NORM.values())))}")
+        pais_override = PAISES_CONOCIDOS_NORM[norm_key]  # forma canónica
 
     if not path or not os.path.isdir(path):
         return err(f"Carpeta no encontrada: {path!r}")
@@ -1522,6 +1528,10 @@ PAISES_CONOCIDOS_NORM = {
         "México":"México","Mexico":"México",
         "Estados Unidos":"Estados Unidos","USA":"Estados Unidos",
         "EEUU":"Estados Unidos",
+        "Venezuela":"Venezuela","Panamá":"Panamá","Panama":"Panamá",
+        "Guatemala":"Guatemala","Cuba":"Cuba","España":"España",
+        "Espana":"España","Dubai":"Dubai","Canadá":"Canadá",
+        "Canada":"Canadá","Australia":"Australia",
     }.items()
 }
 

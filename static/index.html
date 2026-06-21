@@ -930,9 +930,31 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
                 id="btn-imp-sub" disabled>
           🚀 Importar seleccionadas
         </button>
-        <input id="sub-pais-override" placeholder="País (opcional, ej: Venezuela)"
-               style="margin-left:auto;width:200px;font-size:11px;padding:4px 8px;
-                      border:1px solid var(--border);border-radius:4px">
+        <select id="sub-pais-override"
+                style="margin-left:auto;width:200px;font-size:11px;padding:4px 8px;
+                       border:1px solid var(--border);border-radius:4px">
+          <option value="">País (auto-detectar)</option>
+          <option value="Argentina">Argentina</option>
+          <option value="Bolivia">Bolivia</option>
+          <option value="Brasil">Brasil</option>
+          <option value="Canadá">Canadá</option>
+          <option value="Chile">Chile</option>
+          <option value="Colombia">Colombia</option>
+          <option value="Cuba">Cuba</option>
+          <option value="Dubai">Dubai</option>
+          <option value="Ecuador">Ecuador</option>
+          <option value="España">España</option>
+          <option value="Estados Unidos">Estados Unidos</option>
+          <option value="Guatemala">Guatemala</option>
+          <option value="México">México</option>
+          <option value="Nicaragua">Nicaragua</option>
+          <option value="Panamá">Panamá</option>
+          <option value="Paraguay">Paraguay</option>
+          <option value="Perú">Perú</option>
+          <option value="Uruguay">Uruguay</option>
+          <option value="Venezuela">Venezuela</option>
+          <option value="Australia">Australia</option>
+        </select>
       </div>
       <div id="sub-list" style="max-height:200px;overflow-y:auto;
            border:1px solid var(--border);border-radius:4px;display:none">
@@ -1451,12 +1473,18 @@ async function saveEmpresa() {
     tags:      document.getElementById("f-tags").value.trim(),
   };
   if (!body.nombre) { toast("El nombre es obligatorio","err"); return; }
-  const r = await PUT(`/api/empresas/${S.selEmpresa.id}`, body);
-  if (!r.ok) { toast(r.error||"Error","err"); return; }
-  toast("Empresa guardada");
-  cancelEdit();
-  await loadEmpresas();
-  await selectEmpresa(S.selEmpresa.id);
+  const btn = document.getElementById("btn-save");
+  btn.disabled = true;
+  try {
+    const r = await PUT(`/api/empresas/${S.selEmpresa.id}`, body);
+    if (!r.ok) { toast(r.error||"Error","err"); return; }
+    toast("Empresa guardada");
+    cancelEdit();
+    await loadEmpresas();
+    await selectEmpresa(S.selEmpresa.id);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function delEmpresa() {
