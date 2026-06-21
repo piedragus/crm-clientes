@@ -84,12 +84,12 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 
 | Item | Severidad | Sprint |
 |------|-----------|--------|
-| `fuzzywuzzy` → migrar a `rapidfuzz` | Media | C |
-| `importer/` como módulo monolítico en `server.py` | Media | C |
+| ~~`fuzzywuzzy` → migrar a `rapidfuzz`~~ **Resuelto** (`6d2c161`) | — | C |
+| `importer/` parcialmente extraído de `server.py`: constantes y resolución empresa/país ya viven en el package; falta unificar los `os.walk` duplicados en `scanner.py` (ver detalle en Sprint C) | Media | C |
 | Sin staging de importaciones (no hay rollback por lote) | Alta | D |
 | Extracción de PDF básica (solo metadatos de carpeta) | Alta | E |
 | `jsonify(...)` directo mezclado con `err(...)` en aliases | Baja | limpieza futura |
-| 5 tests fallando por `fuzzywuzzy` no instalado | Baja | C |
+| ~~5 tests fallando por `fuzzywuzzy` no instalado~~ **Resuelto** (`6d2c161`) — queda 1 skip intencional (performance, no es parte del CI) | — | C |
 | El importador (carpetas/subcarpetas) **nunca toca el país de una empresa ya existente**, en ningún sentido: si la empresa existente ya tiene país, se preserva (correcto, no lo pisa); pero si la empresa existente **no tiene país** y la importación actual sí detecta uno (auto o `pais_override`), ese dato se descarta igual — no completa el campo. Confirmado en código (`importar_subcarpetas`: el país calculado solo se usa en `agregar_empresa` para empresas nuevas, jamás en un `editar_empresa` para las que ya existían) | Baja | pendiente — agregar checkbox explícito "completar país en empresas existentes que no lo tengan" en la UI antes de habilitarlo |
 | ~~`nombre` en `empresas` es `UNIQUE` case-sensitive...~~ **Resuelto**: las 3 vías de importación que crean empresas (subcarpetas, carpeta con matching manual, masiva) ahora llaman a `sugerirLimpiezaSiHayDuplicados()` al terminar, que corre `/api/limpiar/preview` con umbral alto (90) y si encuentra duplicados muestra un toast clickeable que abre el modal de Limpiar duplicados con el análisis ya cargado. El constraint de la DB sigue sin tocarse (a propósito, ver nota anterior) | — | resuelto en `develop` |
 
@@ -127,18 +127,17 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 
 ---
 
-### 🔜 Sprint C — Refactor importer + rapidfuzz
-*Próximo*
+### 🟡 Sprint C — Refactor importer + rapidfuzz
+*En curso*
 
-- Extraer lógica de importación de `server.py` a package `importer/`
-  - `importer/__init__.py`
-  - `importer/scanner.py` — escaneo de archivos
-  - `importer/resolver.py` — resolución empresa/país
-  - `importer/normalizer.py` — normalización de nombres (unificar con `utils/normalizacion.py`)
-  - `importer/constants.py` — `GENERIC_FOLDERS`, extensiones, etc.
-- Reemplazar `fuzzywuzzy` por `rapidfuzz` (misma API, mejor performance)
-- Eliminar los 5 tests fallando por `fuzzywuzzy`
-- Sin cambios de comportamiento visible para el usuario
+- [x] Reemplazar `fuzzywuzzy`/`thefuzz` por `rapidfuzz` en `db_manager.py`, `server.py`, `utils/utils_legacy.py`, `requirements.txt` (`6d2c161`)
+- [x] Arreglar los 4 tests que estaban `@unittest.skip` por `fuzzywuzzy` no instalado (queda 1 skip intencional, de performance) (`6d2c161`)
+- [x] `importer/__init__.py` — package creado, re-exporta todo
+- [x] `importer/constants.py` — `GENERIC_FOLDERS`, `IMPORT_EXTS`, `PAISES_CONOCIDOS_NORM`
+- [x] `importer/resolver.py` — `normalizar_basico` (ex `_norm`), `detect_pais`, `get_client_name`, `extract_client_from_stem` — funciones puras, sin Flask/DB, listas para reutilizar en el watcher de Sprint E (`ad83cf0`)
+- [ ] `importer/normalizer.py` — no se creó como archivo separado; `normalizar_basico` quedó en `resolver.py` por ahora (es una sola función chica, no justificaba su propio módulo). Si crece, separar.
+- [ ] `importer/scanner.py` — **pendiente, la parte más riesgosa**. Hay ~6 `os.walk` duplicados en `server.py` (`importar_subcarpetas`, `importar_masivo`, `escanear_carpeta`, `importar_empresas_desde_carpeta`, etc.) con lógica de `folder_chain` repetida. Se evaluó unificarlos en esta tanda y se decidió NO hacerlo apurado: cada call site tiene diferencias sutiles (`sorted(files)` en unos, orden de filesystem en otros; early-exit por paginación en `escanear_carpeta`) que si se igualan sin cuidado cambian el **orden visible de resultados en la UI** — justo lo que el sprint pide evitar ("sin cambios de comportamiento visible"). Requiere su propia tanda: primero tests de regresión de orden por cada endpoint, después unificar.
+- Sin cambios de comportamiento visible para el usuario (verificado: 522 tests, 521 OK/1 skip intencional, y prueba en vivo de `pais_override` con resultado idéntico antes/después)
 
 ---
 
