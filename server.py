@@ -550,22 +550,6 @@ def revertir_historial(hid):
     return ok()
 
 # ── Duplicados ────────────────────────────────────────────────────────────────
-@app.route("/api/duplicados")
-def get_duplicados():
-    umbral = to_int(request.args.get("umbral", 85), 85, lo=50, hi=100)
-    return ok(db.get_similar_empresas(umbral))
-
-@app.route("/api/duplicados/merge", methods=["POST"])
-def post_merge():
-    b = request.json or {}
-    origen  = to_int(b.get("origen_id"),  0, lo=1)
-    destino = to_int(b.get("destino_id"), 0, lo=1)
-    if not origen or not destino: return err("IDs inválidos")
-    if origen == destino: return err("Origen y destino son iguales")
-    ok2 = db.unificar_empresas(origen, destino)
-    if not ok2: return err("No se pudo fusionar")
-    return ok()
-
 # ── Búsqueda global ───────────────────────────────────────────────────────────
 @app.route("/api/buscar")
 def buscar():
