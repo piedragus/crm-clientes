@@ -2827,6 +2827,20 @@ document.addEventListener("keydown", e => {
     const saveBtns = activeModal.querySelectorAll(".modal-footer .btn-primary");
     if (saveBtns.length === 1) saveBtns[0].click();
   }
+  if (e.key === "Delete") {
+    const tag = (document.activeElement?.tagName || "").toLowerCase();
+    const isEditing = ["input", "textarea", "select"].includes(tag)
+      || document.activeElement?.isContentEditable;
+    const modalOpen = document.getElementById("overlay").classList.contains("show");
+    if (isEditing || modalOpen) return;
+    if (S.multiSel && S.multiSel.size > 0) {
+      e.preventDefault();
+      delMultiEmpresas();
+    } else if (S.selEmpresa) {
+      e.preventDefault();
+      delEmpresa();
+    }
+  }
 });
 
 // ── Progress bar ─────────────────────────────────────────────────────────────
