@@ -829,21 +829,13 @@ def escanear_carpeta():
     all_paths  = []   # (fpath, fname, folder_chain)
     total_approx = 0
 
-    for root, _, files in os.walk(path):
-        rel_root    = os.path.relpath(root, path)
-        folder_chain = [] if rel_root == "." else rel_root.replace("\\", "/").split("/")
-        for fname in files:
-            if os.path.splitext(fname)[1].lower() not in EXTS:
-                continue
-            fpath = os.path.join(root, fname)
-            if fpath in existing_rutas:
-                continue
-            total_approx += 1
-            all_paths.append((fpath, fname, folder_chain))
-            # Early exit after collecting enough for pagination
-            # (only on first page — deeper pages need full walk for correct offset)
-            if offset == 0 and len(all_paths) >= need:
-                break
+    for fpath, fname, folder_chain in walk_files(path, EXTS):
+        if fpath in existing_rutas:
+            continue
+        total_approx += 1
+        all_paths.append((fpath, fname, folder_chain))
+        # Early exit after collecting enough for pagination
+        # (only on first page — deeper pages need full walk for correct offset)
         if offset == 0 and len(all_paths) >= need:
             break
 
@@ -921,20 +913,14 @@ def importar_empresas_desde_carpeta():
     existentes = 0
     errores    = 0
 
-    for root, _, files in os.walk(path):
-        rel_root     = os.path.relpath(root, path)
-        folder_chain = ([] if rel_root == "."
-                        else rel_root.replace("\\", "/").split("/"))
-        for fname in files:
-            if os.path.splitext(fname)[1].lower() not in EXTS:
-                continue
-            stem   = os.path.splitext(fname)[0]
-            nombre = _get_client_name(folder_chain, stem)
-            if not nombre or len(nombre.strip()) < 2:
-                errores += 1
-                continue
-            nombre = nombre.strip()
-            detectadas.add(nombre)
+    for fpath, fname, folder_chain in walk_files(path, EXTS):
+        stem   = os.path.splitext(fname)[0]
+        nombre = _get_client_name(folder_chain, stem)
+        if not nombre or len(nombre.strip()) < 2:
+            errores += 1
+            continue
+        nombre = nombre.strip()
+        detectadas.add(nombre)
 
     for nombre in sorted(detectadas):
         if nombre.lower() in emp_by_nombre:
@@ -1363,17 +1349,11 @@ def importar_subcarpetas():
     for sub_path in subcarpetas:
         if not os.path.isdir(sub_path):
             continue
-        for root, _, files in os.walk(sub_path):
-            rel_root     = os.path.relpath(root, path)
-            folder_chain = ([] if rel_root == "."
-                            else rel_root.replace("\\", "/").split("/"))
-            for fname in sorted(files):
-                if os.path.splitext(fname)[1].lower() not in EXTS:
-                    continue
-                fpath = os.path.join(root, fname)
-                if fpath in existing_rutas:
-                    continue
-                all_files.append((fpath, fname, folder_chain))
+        for fpath, fname, folder_chain in walk_files(
+                sub_path, EXTS, relative_to=path, sort_files=True):
+            if fpath in existing_rutas:
+                continue
+            all_files.append((fpath, fname, folder_chain))
 
     total_pendientes = len(all_files)
     lote_files       = all_files[offset: offset + lote]
@@ -1499,6 +1479,7 @@ from importer import (
     extract_client_from_stem as _extract_client_from_stem,
     get_client_name as _get_client_name,
 )
+from importer.scanner import walk_files
 
 
 @app.route("/api/importar/masivo", methods=["POST"])
@@ -1545,116 +1526,102 @@ def importar_masivo():
     }
 
     # Walk the folder tree
-    for root, dirs, files in os.walk(path):
-        # Build folder chain relative to base path
-        rel = os.path.relpath(root, path)
-        if rel == '.':
-            folder_chain = []
-        else:
-            folder_chain = rel.replace('\\', '/').replace('\\', '/').split('/')
+    for fpath, fname, folder_chain in walk_files(path, {'.pdf'}):
+        if fpath in existing:
+            stats["ya_existian"] += 1
+            continue
 
-        for fname in files:
-            ext = os.path.splitext(fname)[1].lower()
-            if ext != '.pdf':  # Only PDF
-                continue
+        stem = os.path.splitext(fname)[0]
+        client_name = _get_client_name(folder_chain, stem)
 
-            fpath = os.path.join(root, fname)
+        if not client_name or len(client_name.strip()) < 2:
+            stats["errores"] += 1
+            continue
 
-            if fpath in existing:
-                stats["ya_existian"] += 1
-                continue
+        client_name = client_name.strip()
 
-            stem = os.path.splitext(fname)[0]
-            client_name = _get_client_name(folder_chain, stem)
+        if dry_run:
+            stats["cotizaciones_importadas"] += 1
+            continue
 
-            if not client_name or len(client_name.strip()) < 2:
-                stats["errores"] += 1
-                continue
-
-            client_name = client_name.strip()
-
-            if dry_run:
-                stats["cotizaciones_importadas"] += 1
-                continue
-
-            # Find or create empresa
-            # 1. Resolver por alias exacto normalizado (cache, sin N+1)
-            norm = _norm_alias(client_name)
-            eid = alias_cache.get(norm)
+        # Find or create empresa
+        # 1. Resolver por alias exacto normalizado (cache, sin N+1)
+        norm = _norm_alias(client_name)
+        eid = alias_cache.get(norm)
+        if not eid:
+            # 2. Flujo viejo: nombre exacto case-insensitive
+            eid = emp_by_nombre.get(client_name.lower())
             if not eid:
-                # 2. Flujo viejo: nombre exacto case-insensitive
-                eid = emp_by_nombre.get(client_name.lower())
-                if not eid:
-                    for en, eid_try in emp_by_nombre.items():
-                        if en == client_name.lower():
-                            eid = eid_try
-                            break
+                for en, eid_try in emp_by_nombre.items():
+                    if en == client_name.lower():
+                        eid = eid_try
+                        break
 
-            if not eid:
-                # Create new empresa
-                ok2 = db.agregar_empresa(
-                    client_name, "", "", "", "", "", "")
-                if ok2:
-                    row = db.fetchone(
-                        "SELECT id FROM empresas WHERE nombre=?",
-                        (client_name,))
-                    if row:
-                        eid = row["id"]
-                        emp_by_nombre[client_name.lower()] = eid
-                        stats["empresas_creadas"] += 1
-                        stats["empresas_nuevas"].append(client_name)
-
-            if not eid:
-                stats["errores"] += 1
-                continue
-
-            # Get file date
-            try:
-                mtime = _dt.fromtimestamp(
-                    os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                mtime = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            ok2 = db.agregar_cotizacion_con_ruta(
-                eid, fname, 0.0, mtime, fpath)
+        if not eid:
+            # Create new empresa
+            ok2 = db.agregar_empresa(
+                client_name, "", "", "", "", "", "")
             if ok2:
-                stats["cotizaciones_importadas"] += 1
-                existing.add(fpath)
+                row = db.fetchone(
+                    "SELECT id FROM empresas WHERE nombre=?",
+                    (client_name,))
+                if row:
+                    eid = row["id"]
+                    emp_by_nombre[client_name.lower()] = eid
+                    stats["empresas_creadas"] += 1
+                    stats["empresas_nuevas"].append(client_name)
 
-                # Launch background resumen
-                def _bg(fp=fpath, ei=eid):
-                    try:
-                        import sqlite3 as _sq
-                        from extractor_texto import extraer
-                        from resumidor import resumir
-                        texto = extraer(fp)
-                        data  = resumir(texto)
-                        conn  = _sq.connect(cfg.get_db_name(), timeout=10)
-                        conn.execute("PRAGMA busy_timeout=5000")
-                        cols = [r[1] for r in
-                                conn.execute("PRAGMA table_info(cotizaciones)")]
-                        sets, vals = [], []
-                        if "resumen"      in cols:
-                            sets.append("resumen=?")
-                            vals.append(data.get("resumen",""))
-                        if "proveedor_ia" in cols:
-                            sets.append("proveedor_ia=?")
-                            vals.append(data.get("proveedor_ia","none"))
-                        if "monto" in cols and data.get("monto",0) and                                 float(data.get("monto",0)) > 0:
-                            sets.append("monto=?")
-                            vals.append(float(data["monto"]))
-                        if sets:
-                            vals += [ei, fp]
-                            conn.execute(
-                                f"UPDATE cotizaciones SET {','.join(sets)} "
-                                f"WHERE empresa_id=? AND ruta_archivo=?", vals)
-                            conn.commit()
-                        conn.close()
-                    except Exception as exc:
-                        logging.error(f"bg resumen masivo: {exc}")
-                threading.Thread(target=_bg, daemon=True).start()
-            else:
-                stats["errores"] += 1
+        if not eid:
+            stats["errores"] += 1
+            continue
+
+        # Get file date
+        try:
+            mtime = _dt.fromtimestamp(
+                os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            mtime = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        ok2 = db.agregar_cotizacion_con_ruta(
+            eid, fname, 0.0, mtime, fpath)
+        if ok2:
+            stats["cotizaciones_importadas"] += 1
+            existing.add(fpath)
+
+            # Launch background resumen
+            def _bg(fp=fpath, ei=eid):
+                try:
+                    import sqlite3 as _sq
+                    from extractor_texto import extraer
+                    from resumidor import resumir
+                    texto = extraer(fp)
+                    data  = resumir(texto)
+                    conn  = _sq.connect(cfg.get_db_name(), timeout=10)
+                    conn.execute("PRAGMA busy_timeout=5000")
+                    cols = [r[1] for r in
+                            conn.execute("PRAGMA table_info(cotizaciones)")]
+                    sets, vals = [], []
+                    if "resumen"      in cols:
+                        sets.append("resumen=?")
+                        vals.append(data.get("resumen",""))
+                    if "proveedor_ia" in cols:
+                        sets.append("proveedor_ia=?")
+                        vals.append(data.get("proveedor_ia","none"))
+                    if "monto" in cols and data.get("monto",0) and                                 float(data.get("monto",0)) > 0:
+                        sets.append("monto=?")
+                        vals.append(float(data["monto"]))
+                    if sets:
+                        vals += [ei, fp]
+                        conn.execute(
+                            f"UPDATE cotizaciones SET {','.join(sets)} "
+                            f"WHERE empresa_id=? AND ruta_archivo=?", vals)
+                        conn.commit()
+                    conn.close()
+                except Exception as exc:
+                    logging.error(f"bg resumen masivo: {exc}")
+            threading.Thread(target=_bg, daemon=True).start()
+        else:
+            stats["errores"] += 1
 
     return ok(stats)
 
@@ -1683,30 +1650,23 @@ def importar_masivo_preview():
     ya_importados = 0
     sample = []
 
-    for root, dirs, files in os.walk(path):
-        rel = os.path.relpath(root, path)
-        folder_chain = [] if rel == '.' else rel.replace('\\', '/').split('/')
-
-        for fname in files:
-            if os.path.splitext(fname)[1].lower() != '.pdf':
-                continue
-            total_pdf += 1
-            fpath = os.path.join(root, fname)
-            if fpath in existing:
-                ya_importados += 1
-                continue
-            stem  = os.path.splitext(fname)[0]
-            client = _get_client_name(folder_chain, stem).strip()
-            if client.lower() in empresas_existentes:
-                clients_existing.add(client)
-            else:
-                clients_new.add(client)
-            if len(sample) < 50:
-                sample.append({
-                    "file": fname,
-                    "client": client,
-                    "is_new": client.lower() not in empresas_existentes,
-                })
+    for fpath, fname, folder_chain in walk_files(path, {'.pdf'}):
+        total_pdf += 1
+        if fpath in existing:
+            ya_importados += 1
+            continue
+        stem  = os.path.splitext(fname)[0]
+        client = _get_client_name(folder_chain, stem).strip()
+        if client.lower() in empresas_existentes:
+            clients_existing.add(client)
+        else:
+            clients_new.add(client)
+        if len(sample) < 50:
+            sample.append({
+                "file": fname,
+                "client": client,
+                "is_new": client.lower() not in empresas_existentes,
+            })
 
     return ok({
         "total_pdf":         total_pdf,
