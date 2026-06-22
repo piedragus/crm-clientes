@@ -86,6 +86,7 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 |------|-----------|--------|
 | ~~`fuzzywuzzy` → migrar a `rapidfuzz`~~ **Resuelto** (`6d2c161`) | — | C |
 | ~~`importer/` parcialmente extraído de `server.py`~~ **Resuelto** (`5dc5fcb`) — `scanner.py` unifica 5 de 6 `os.walk`; `listar_subcarpetas` queda afuera a propósito | — | C |
+| ~~Sistema de duplicados duplicado~~ **Resuelto** (`cadd82b`) — había dos features para lo mismo: `/api/duplicados` legacy (pares, sin aliases) y `/api/limpiar/preview`+`unificar` (clusters, con aliases). Eliminado el legacy, modal y menú duplicado (aparecía 2 veces en Herramientas). De paso se encontró y corrigió un bug real: `showMain()` duplicada por hoisting de JS dejaba el Dashboard superpuesto al volver a la vista principal | — | auditoría |
 | Sin staging de importaciones (no hay rollback por lote) | Alta | D |
 | Extracción de PDF básica (solo metadatos de carpeta) | Alta | E |
 | `jsonify(...)` directo mezclado con `err(...)` en aliases | Baja | limpieza futura |
