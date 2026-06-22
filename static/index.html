@@ -23,7 +23,10 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
       align-items:center;gap:8px;flex-shrink:0}
 #logo strong{font-size:20px}#logo span{font-size:10px;color:#BFDBFE}
 #stats{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:8px}
-.stat-card{background:var(--sidebar2);padding:8px 10px;border-radius:4px}
+.stat-card{background:var(--sidebar2);padding:8px 10px;border-radius:4px;cursor:pointer;transition:background .15s}
+.stat-card:hover{background:#2A3A52}
+.flash-highlight{animation:flashbg 1.4s ease}
+@keyframes flashbg{0%,100%{background:transparent}30%{background:#FEF08A33}}
 .stat-card .lbl{font-size:9px;font-weight:700;color:var(--muted);
                 text-transform:uppercase;letter-spacing:.5px}
 .stat-card .val{font-size:20px;font-weight:700;margin-top:2px}
@@ -325,10 +328,10 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 <div id="sidebar">
   <div id="logo"><strong>CRM</strong><span>Clientes</span></div>
   <div id="stats">
-    <div class="stat-card c-emp"><div class="lbl">Empresas</div><div class="val" id="s-emp">—</div></div>
-    <div class="stat-card c-con"><div class="lbl">Contactos</div><div class="val" id="s-con">—</div></div>
-    <div class="stat-card c-cot"><div class="lbl">Cotizaciones</div><div class="val" id="s-cot">—</div></div>
-    <div class="stat-card c-rec"><div class="lbl">Activas 30d</div><div class="val" id="s-rec">—</div></div>
+    <div class="stat-card c-emp" onclick="statCardClick('empresas')" title="Ver listado de empresas"><div class="lbl">Empresas</div><div class="val" id="s-emp">—</div></div>
+    <div class="stat-card c-con" onclick="statCardClick('contactos')" title="Filtrar empresas con contactos"><div class="lbl">Contactos</div><div class="val" id="s-con">—</div></div>
+    <div class="stat-card c-cot" onclick="statCardClick('cotizaciones')" title="Buscar cotizaciones"><div class="lbl">Cotizaciones</div><div class="val" id="s-cot">—</div></div>
+    <div class="stat-card c-rec" onclick="statCardClick('activas')" title="Ver actividad reciente"><div class="lbl">Activas 30d</div><div class="val" id="s-rec">—</div></div>
   </div>
 
   <div class="nav-sep">Ventas</div>
@@ -1257,6 +1260,26 @@ async function loadStats() {
   document.getElementById("s-con").textContent = r.data.contactos;
   document.getElementById("s-cot").textContent = r.data.cotizaciones;
   document.getElementById("s-rec").textContent = r.data.activas_30d;
+}
+
+// ── Stat cards clickeables (issue #3) ─────────────────────────────────────────
+function statCardClick(type) {
+  showMain();
+  if (type === "empresas") {
+    clearFilters();
+    document.getElementById("search").value = "";
+  } else if (type === "contactos") {
+    document.getElementById("fl-con").value = "con";
+    applyFilters();
+  } else if (type === "cotizaciones") {
+    showSearch();
+  } else if (type === "activas") {
+    const panel = document.getElementById("act-recientes");
+    panel.scrollIntoView({behavior: "smooth", block: "center"});
+    panel.classList.remove("flash-highlight");
+    // restart animation even if clicked twice in a row
+    requestAnimationFrame(() => panel.classList.add("flash-highlight"));
+  }
 }
 
 async function loadFilterMeta() {
