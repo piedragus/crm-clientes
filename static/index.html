@@ -197,7 +197,6 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 .sim-low td{background:#FEE2E2}
 
 /* Dupes */
-#dupes-modal .modal{width:800px}
 
 /* Loader */
 .tools-section{font-size:9px;font-weight:700;color:var(--muted);
@@ -375,7 +374,6 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <div class="tools-item" onclick="closeToolsMenu();showImportCarpeta()">📁 Carpeta de cotizaciones (manual)</div>
           <div class="tools-sep"></div>
           <div class="tools-section">BÚSQUEDA</div>
-          <div class="tools-item" onclick="closeToolsMenu();showDupes()">🔍 Buscar duplicados</div>
           <div class="tools-item" onclick="closeToolsMenu();showLimpieza()">🧹 Limpiar y unificar empresas</div>
           <div class="tools-sep"></div>
           <div class="tools-section">EXPORTAR</div>
@@ -383,8 +381,6 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <div class="tools-item" onclick="closeToolsMenu();doExport('csv')">📄 Exportar CSV</div>
           <div class="tools-sep"></div>
           <div class="tools-section">GESTIÓN</div>
-          <div class="tools-item" onclick="closeToolsMenu();showDupes()">🔍 Buscar duplicados</div>
-          <div class="tools-item" onclick="closeToolsMenu();showLimpieza()">🧹 Limpiar y unificar empresas</div>
           <div class="tools-item" onclick="closeToolsMenu();doBackup()">💾 Hacer backup</div>
           <div class="tools-item" onclick="closeToolsMenu();doRestore()">↩ Restaurar backup</div>
           <div class="tools-sep"></div>
@@ -839,36 +835,6 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     </div>
   </div>
 
-  <!-- Duplicados -->
-  <div class="modal" id="dupes-modal" style="display:none;width:900px;max-width:96vw">
-    <div class="modal-header">
-      <span>Duplicados</span>
-      <div style="display:flex;align-items:center;gap:8px;margin-left:16px">
-        <label style="color:#94A3B8;font-size:11px">Umbral %:</label>
-        <input id="dupes-thresh" type="number" value="85" min="50" max="100"
-               style="width:55px;padding:3px 6px;background:#1E293B;border:1px solid #334155;
-                      color:#fff;border-radius:4px;font-size:12px">
-        <button class="btn btn-ghost" onclick="loadDupes()" style="padding:4px 10px">Buscar</button>
-      </div>
-      <button class="modal-close" onclick="closeModal('dupes-modal')">✕</button>
-    </div>
-    <div class="modal-body" style="padding:0">
-      <div style="max-height:380px;overflow:auto">
-        <table class="sub-table" style="width:100%">
-          <thead><tr>
-            <th style="width:32px"><input type="checkbox" id="chk-all-dupes" onchange="if(this.checked)selectAllDupes();else{document.querySelectorAll('.dupe-chk').forEach(c=>c.checked=false);updateDupesUI();}"></th>
-            <th>Empresa A</th><th>Empresa B</th><th>Similitud</th><th>Dirección</th>
-          </tr></thead>
-          <tbody id="dupes-body"></tbody>
-        </table>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <span id="dupes-status" style="color:var(--muted);font-size:11px;margin-right:auto"></span>
-      <button class="btn btn-ghost" onclick="closeModal('dupes-modal')">Cerrar</button>
-      <button class="btn btn-warn" id="btn-merge-selected" onclick="mergeSelected()" disabled>Fusionar seleccionados</button>
-    </div>
-  </div>
 
   <!-- Importar carpeta -->
   <div class="modal" id="importer-modal" style="display:none;width:960px;max-width:96vw">
@@ -2083,100 +2049,6 @@ async function gotoEmpresaFromSearch() {
   if (row) row.scrollIntoView({block:"nearest"});
 }
 
-// ── Duplicados ────────────────────────────────────────────────────────────────
-async function showDupes() {
-  openModal("dupes-modal");
-  loadDupes();
-}
-
-async function loadDupes() {
-  const thresh = document.getElementById("dupes-thresh").value || 85;
-  document.getElementById("dupes-status").textContent = "Buscando…";
-  document.getElementById("dupes-body").innerHTML =
-    '<tr><td colspan="5" style="text-align:center;padding:16px"><div class="spinner"></div></td></tr>';
-  const r = await GET(`/api/duplicados?umbral=${thresh}`);
-  if (!r.ok) { toast(r.error||"Error","err"); return; }
-  const pares = r.data;
-  document.getElementById("dupes-status").textContent =
-    `${pares.length} par(es) encontrado(s) — Seleccioná y usá "Fusionar seleccionados"`;
-  document.getElementById("dupes-body").innerHTML = pares.map((p,i) => {
-    const cls = p.similitud >= 90 ? "style='background:var(--row-g)'" : "style='background:var(--row-a)'";
-    return `<tr ${cls} data-idx="${i}" data-id1="${p.id1}" data-id2="${p.id2}"
-              data-nom1="${esc(p.nombre1)}" data-nom2="${esc(p.nombre2)}">
-      <td style="padding:4px 8px">
-        <input type="checkbox" class="dupe-chk" data-idx="${i}"
-               onchange="updateDupesUI()"
-               style="margin-right:4px">
-      </td>
-      <td>${esc(p.nombre1)}</td>
-      <td>${esc(p.nombre2)}</td>
-      <td>${p.similitud}%</td>
-      <td style="padding:4px 8px">
-        <select class="dupe-dir" data-idx="${i}"
-                style="font-size:10px;border:1px solid var(--border);border-radius:3px;padding:1px 4px;background:var(--bg)">
-          <option value="1to2">A → B</option>
-          <option value="2to1">B → A</option>
-        </select>
-      </td>
-    </tr>`;
-  }).join("") || '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--muted)">Sin duplicados ✓</td></tr>';
-  updateDupesUI();
-}
-
-function updateDupesUI() {
-  const checked = document.querySelectorAll(".dupe-chk:checked").length;
-  const btnMerge = document.getElementById("btn-merge-selected");
-  if (btnMerge) {
-    btnMerge.disabled = checked === 0;
-    btnMerge.textContent = checked > 0 ? `Fusionar ${checked} seleccionado${checked>1?"s":""}` : "Fusionar seleccionados";
-  }
-}
-
-function selectAllDupes() {
-  document.querySelectorAll(".dupe-chk").forEach(c => c.checked = true);
-  updateDupesUI();
-}
-
-async function mergeSelected() {
-  const checks = [...document.querySelectorAll(".dupe-chk:checked")];
-  if (checks.length === 0) return;
-  if (!confirm(`¿Fusionar ${checks.length} par(es) de empresas?\nEsta acción no se puede deshacer.`)) return;
-
-  // Agrupar por destino -> batch request por destino (un solo POST por grupo)
-  const byDestino = new Map();
-  for (const chk of checks) {
-    const idx = chk.dataset.idx;
-    const row = document.querySelector(`tr[data-idx="${idx}"]`);
-    const dir = document.querySelector(`.dupe-dir[data-idx="${idx}"]`).value;
-    const id1 = parseInt(row.dataset.id1), id2 = parseInt(row.dataset.id2);
-    const [origen, destino] = dir === "1to2" ? [id1, id2] : [id2, id1];
-    if (!byDestino.has(destino)) byDestino.set(destino, []);
-    byDestino.get(destino).push(origen);
-  }
-
-  let fusionadas = 0, errores = 0;
-  for (const [destino_id, origen_ids] of byDestino) {
-    try {
-      const r = await POST("/api/limpiar/unificar", { destino_id, origen_ids });
-      if (r.ok) fusionadas += r.data?.fusionadas ?? origen_ids.length;
-      else errores += origen_ids.length;
-    } catch { errores += origen_ids.length; }
-  }
-
-  toast(`Fusionadas: ${fusionadas}${errores ? ` | Errores: ${errores}` : ""}`);
-  await Promise.all([loadEmpresas(), loadStats()]);
-  loadDupes();
-}
-
-async function mergeEmpresas(origenId, origenNom, destinoId, destinoNom) {
-  if (!confirm(`¿Fusionar "${origenNom}" → "${destinoNom}"?\nEsto eliminará "${origenNom}".`)) return;
-  const r = await POST("/api/duplicados/merge", {origen_id: origenId, destino_id: destinoId});
-  if (!r.ok) { toast(r.error||"Error","err"); return; }
-  toast(`Fusionado: "${origenNom}" → "${destinoNom}"`);
-  await Promise.all([loadEmpresas(), loadStats()]);
-  loadDupes();
-}
-
 // ── Importar CSV ──────────────────────────────────────────────────────────────
 function showImportCSV() {
   const inp = document.createElement("input");
@@ -2650,28 +2522,6 @@ async function showFilters() {
   openModal("filters-modal");
 }
 
-async function saveFilterPreset() {
-  const nombre = prompt("Nombre para este filtro:");
-  if (!nombre) return;
-  const f = currentFiltersFromModal();
-  const r = await POST("/api/config/filtros", {nombre, filtros: f});
-  if (!r.ok) { toast(r.error||"Error","err"); return; }
-  toast(`Filtro '${nombre}' guardado`);
-}
-
-async function loadFilterPreset(nombre) {
-  const r = await GET("/api/config");
-  if (!r.ok) return;
-  const f = (r.data.filtros_guardados || {})[nombre];
-  if (!f) return;
-  document.getElementById("fl-pais").value  = f.pais  || "";
-  document.getElementById("fl-rubro").value = f.rubro || "";
-  document.getElementById("fl-tag").value   = f.tag   || "";
-  document.getElementById("fl-cot").value   = f.cotizaciones_cond || "";
-  document.getElementById("fl-con").value   = f.contactos_cond    || "";
-  document.getElementById("fl-dias").value  = f.dias_actividad    || 0;
-}
-
 async function deleteFilterPreset(nombre) {
   const r = await fetch(`/api/config/filtros/${encodeURIComponent(nombre)}`,
                         {method:"DELETE"});
@@ -2708,25 +2558,13 @@ async function loadFilterPreset(nombre) {
   document.getElementById("fl-tag").value   = f.tag   || "";
   document.getElementById("fl-cot").value   = f.cotizaciones_cond || "";
   document.getElementById("fl-con").value   = f.contactos_cond    || "";
-  document.getElementById("fl-dias").value  = f.dias_actividad    || "0";
+  document.getElementById("fl-dias").value  = f.dias_actividad    || 0;
 }
 
 async function saveFilterPreset() {
   const nombre = prompt("Nombre para este filtro:");
   if (!nombre) return;
-  const f = {};
-  const pais = document.getElementById("fl-pais").value;
-  const rubro = document.getElementById("fl-rubro").value;
-  const tag   = document.getElementById("fl-tag").value;
-  const cot   = document.getElementById("fl-cot").value;
-  const con   = document.getElementById("fl-con").value;
-  const dias  = parseInt(document.getElementById("fl-dias").value)||0;
-  if (pais)  f.pais  = pais;
-  if (rubro) f.rubro = rubro;
-  if (tag)   f.tag   = tag;
-  if (cot)   f.cotizaciones_cond = cot;
-  if (con)   f.contactos_cond    = con;
-  if (dias)  f.dias_actividad    = dias;
+  const f = currentFiltersFromModal();
   const r = await POST("/api/config/filtros", {nombre, filtros: f});
   if (r.ok) { toast(`Filtro "${nombre}" guardado`); showFilters(); }
   else toast(r.error || "Error", "err");
@@ -3027,14 +2865,6 @@ async function showDashboard() {
   await loadDashboard();
 }
 
-// Override showMain to also hide dashboard
-const _origShowMain = typeof showMain === 'function' ? showMain : null;
-function showMain() {
-  document.getElementById("pipeline-page").classList.remove("active");
-  document.getElementById("dash-page").classList.remove("active");
-  document.getElementById("body").style.display = "flex";
-}
-
 async function loadDashboard() {
   const meses = document.getElementById("dash-meses").value;
   const pais  = document.getElementById("dash-pais").value;
@@ -3158,6 +2988,7 @@ async function showPipeline() {
 
 function showMain() {
   document.getElementById("pipeline-page").classList.remove("active");
+  document.getElementById("dash-page").classList.remove("active");
   document.getElementById("body").style.display = "flex";
 }
 
