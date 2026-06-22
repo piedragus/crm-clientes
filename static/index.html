@@ -1302,21 +1302,22 @@ function populateSelect(id, items) {
 // ── Empresa list ──────────────────────────────────────────────────────────────
 async function loadEmpresas() {
   const q = document.getElementById("search").value.trim();
-  const params = new URLSearchParams({q, page: S.serverPage, page_size: 250});
+  const params = new URLSearchParams({q, page: S.serverPage, page_size: 100});
   Object.entries(S.filters).forEach(([k,v]) => v && params.set(k, v));
   const r = await GET("/api/empresas?" + params);
   if (!r.ok) return;
-  S.allEmpresas  = r.data;
+  S.allEmpresas   = r.data;
   S.totalEmpresas = r.total || r.data.length;
   S.serverPages   = r.pages || 1;
+  // No local paging needed — server already paged at 100
   S.page = 0;
-  applySort();
   renderList();
 }
 
 function onSearch() { S.serverPage = 0; clearTimeout(S._st); S._st = setTimeout(loadEmpresas, 250); }
 
 function applySort() {
+  // Sort happens client-side within the current server page
   const col = S.sortCol;
   S.filtered = [...S.allEmpresas].sort((a,b) => {
     let va = a[col], vb = b[col];
@@ -1337,22 +1338,19 @@ function sortList(col) {
 }
 
 function renderList() {
-  const total = S.filtered.length;
-  const pages = Math.max(1, Math.ceil(total / S.pageSize));
-  S.page = Math.min(S.page, pages-1);
-  const chunk = S.filtered.slice(S.page*S.pageSize, (S.page+1)*S.pageSize);
+  const total  = S.totalEmpresas || S.filtered.length;
+  const pages  = S.serverPages || 1;
+  const chunk  = S.filtered;  // server already paginated
 
   document.getElementById("list-count").textContent =
-    S.totalEmpresas > S.allEmpresas.length
+    pages > 1
       ? `${S.allEmpresas.length} de ${S.totalEmpresas}`
-      : total;
-  const hasServerNext = S.serverPage < S.serverPages - 1;
-  const hasServerPrev = S.serverPage > 0;
+      : S.filtered.length;
+
   document.getElementById("pg-label").textContent =
-    pages > 1 ? `${S.page+1}/${pages}` :
-    S.serverPages > 1 ? `Pág ${S.serverPage+1}/${S.serverPages}` : "";
-  document.getElementById("pg-prev").disabled = S.page === 0 && !hasServerPrev;
-  document.getElementById("pg-next").disabled = S.page >= pages-1 && !hasServerNext;
+    pages > 1 ? `Pág ${S.serverPage+1} / ${pages}` : "";
+  document.getElementById("pg-prev").disabled = S.serverPage === 0;
+  document.getElementById("pg-next").disabled = S.serverPage >= pages - 1;
 
   const now = new Date();
   const tbody = document.getElementById("list-body");
@@ -1380,13 +1378,10 @@ function rowClass(ultima) {
 }
 
 function prevPage() {
-  if (S.page > 0) { S.page--; renderList(); }
-  else if (S.serverPage > 0) { S.serverPage--; loadEmpresas(); }
+  if (S.serverPage > 0) { S.serverPage--; loadEmpresas(); }
 }
 function nextPage() {
-  const pages = Math.ceil(S.filtered.length / S.pageSize);
-  if (S.page < pages-1) { S.page++; renderList(); }
-  else if (S.serverPage < S.serverPages - 1) { S.serverPage++; loadEmpresas(); }
+  if (S.serverPage < S.serverPages - 1) { S.serverPage++; loadEmpresas(); }
 }
 
 // ── Select empresa ────────────────────────────────────────────────────────────
