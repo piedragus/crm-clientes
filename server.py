@@ -1788,6 +1788,306 @@ def get_estado_ia(cid):
         "moneda":       row.get("moneda",""),
     })
 
+
+# ── Sprint D: staging de importación (preview/corrección/commit) ─────────────
+IMPORT_BATCH_EXTS = {".pdf", ".docx", ".xlsx", ".doc", ".xls", ".pptx", ".txt"}
+ESTADOS_BATCH_VALIDOS = {"preview", "corrigiendo", "committing", "completado", "error", "cancelado"}
+ESTADOS_ITEM_VALIDOS  = {"pendiente", "match_auto", "requiere_revision", "omitido", "importado", "error"}
+ACCIONES_ITEM_VALIDAS = {"crear", "usar_existente", "omitir"}
+
+
+@app.route("/api/import_batches/scan", methods=["POST"])
+def import_batch_scan():
+    """
+    Escanea una carpeta y crea un batch + sus items en estado 'preview'.
+    NO toca cotizaciones ni crea empresas todavía — solo registra qué se
+    detectó, para que el usuario corrija antes de confirmar (commit).
+    """
+    b    = request.json or {}
+    path = clean(b.get("path"))
+    if not path or not os.path.isdir(path):
+        return err(f"Carpeta no encontrada: {path!r}")
+
+    thresh = max(0, min(to_int(b.get("thresh", 85), 85), 100))
+
+    try:
+        from rapidfuzz import process as fz_process
+    except ImportError:
+        from difflib import SequenceMatcher
+        class fz_process:
+            @staticmethod
+            def extract(q, choices, limit=1):
+                s = [(ch, int(SequenceMatcher(None, str(q or "").lower(),
+                      str(ch or "").lower()).ratio()*100)) for ch in choices]
+                return sorted(s, key=lambda x:-x[1])[:limit]
+
+    empresas     = db.fetchall("SELECT id, nombre FROM empresas ORDER BY nombre")
+    comp_names   = [e["nombre"] for e in empresas]
+    comp_by_name = {e["nombre"]: e["id"] for e in empresas}
+
+    from utils.normalizacion import normalizar_alias_empresa as _norm_alias
+    alias_cache = {
+        row["alias_norm"]: row["empresa_id"]
+        for row in db.fetchall("SELECT alias_norm, empresa_id FROM empresa_aliases")
+    }
+
+    existing_rutas  = {r["ruta_archivo"] for r in
+                       db.fetchall("SELECT ruta_archivo FROM cotizaciones")
+                       if r.get("ruta_archivo")}
+
+    # Rutas ya en vuelo en OTRO batch que todavía no terminó. Sin esto, dos
+    # batches escaneando la misma carpeta sin que el primero haga commit
+    # generan archivos duplicados en ambos — el segundo commit los rechaza
+    # uno por uno con errores incomprensibles ("ya existe") en vez de un
+    # aviso claro desde el preview.
+    rutas_en_otros_batches = {
+        (r["file_path"], r["batch_id"]) for r in db.fetchall("""
+            SELECT DISTINCT i.file_path, i.batch_id
+            FROM import_items i
+            JOIN import_batches b ON b.id = i.batch_id
+            WHERE b.estado NOT IN ('completado', 'cancelado', 'error')
+        """)
+    }
+    rutas_bloqueadas = {fp: bid for fp, bid in rutas_en_otros_batches}
+
+    batch_id = db.crear_import_batch("masivo_staging", path, metadata={"thresh": thresh})
+    if not batch_id:
+        return err("No se pudo crear el batch")
+
+    counts = {"requiere_revision": 0, "match_auto": 0, "omitido": 0}
+    total = 0
+
+    for fpath, fname, folder_chain in walk_files(path, IMPORT_BATCH_EXTS):
+        total += 1
+        stem = os.path.splitext(fname)[0]
+        empresa_nombre = _get_client_name(folder_chain, stem)
+        pais_detectado = _detect_pais(folder_chain)
+
+        # Ya importado antes (por ruta) -> se previsualiza como omitido,
+        # no se vuelve a tocar al hacer commit.
+        if fpath in existing_rutas:
+            counts["omitido"] += 1
+            db.agregar_import_item(
+                batch_id, fpath, fname,
+                empresa_detectada=empresa_nombre, pais_detectado=pais_detectado,
+                estado="omitido", accion="omitir",
+                error="Ya importado anteriormente (misma ruta)")
+            continue
+
+        # En vuelo en otro batch que todavía no se completó/canceló: evita
+        # que dos importaciones simultáneas sobre la misma carpeta terminen
+        # creando duplicados o rebotando con errores confusos al hacer commit.
+        if fpath in rutas_bloqueadas:
+            counts["omitido"] += 1
+            db.agregar_import_item(
+                batch_id, fpath, fname,
+                empresa_detectada=empresa_nombre, pais_detectado=pais_detectado,
+                estado="omitido", accion="omitir",
+                error=f"Bloqueado por otro proceso de importación abierto (batch #{rutas_bloqueadas[fpath]})")
+            continue
+
+        # 1. Alias exacto (Sprint B) gana siempre sobre fuzzy
+        alias_norm = _norm_alias(empresa_nombre) if empresa_nombre else None
+        eid = alias_cache.get(alias_norm) if alias_norm else None
+        sim = 100 if eid else 0
+
+        # 2. Si no hay alias, fuzzy match contra nombres de empresa existentes
+        if not eid and comp_names and empresa_nombre:
+            hits = fz_process.extract(empresa_nombre, comp_names, limit=1)
+            if hits:
+                sugerida, score = hits[0][0], int(round(hits[0][1]))
+                if score >= thresh:
+                    eid, sim = comp_by_name.get(sugerida), score
+
+        if eid:
+            counts["match_auto"] += 1
+            db.agregar_import_item(
+                batch_id, fpath, fname,
+                empresa_detectada=empresa_nombre, empresa_id=eid,
+                pais_detectado=pais_detectado, estado="match_auto",
+                accion="usar_existente", confianza=sim)
+        else:
+            counts["requiere_revision"] += 1
+            db.agregar_import_item(
+                batch_id, fpath, fname,
+                empresa_detectada=empresa_nombre,
+                pais_detectado=pais_detectado, estado="requiere_revision",
+                accion="crear", confianza=sim)
+
+    db.actualizar_import_batch(batch_id, total_items=total,
+                               omitidos=counts["omitido"])
+    return ok({"batch_id": batch_id, "total_items": total, **counts})
+
+
+@app.route("/api/import_batches/<int:batch_id>")
+def import_batch_get(batch_id):
+    batch = db.obtener_import_batch(batch_id)
+    if not batch: return err("Batch no encontrado", 404)
+    batch["conteo_por_estado"] = db.contar_import_items_por_estado(batch_id)
+    return ok(batch)
+
+
+@app.route("/api/import_batches/<int:batch_id>/items")
+def import_batch_items(batch_id):
+    if not db.obtener_import_batch(batch_id):
+        return err("Batch no encontrado", 404)
+    estado = request.args.get("estado")
+    if estado and estado not in ESTADOS_ITEM_VALIDOS:
+        return err(f"Estado inválido: {estado!r}")
+    offset = max(0, to_int(request.args.get("offset", 0), 0))
+    limit  = max(1, min(to_int(request.args.get("limit", 200), 200), 500))
+    items  = db.listar_import_items(batch_id, estado=estado, offset=offset, limit=limit)
+    return ok(items, offset=offset, limit=limit)
+
+
+@app.route("/api/import_items/<int:item_id>", methods=["PATCH"])
+def import_item_patch(item_id):
+    """Corrección manual de un item antes del commit: elegir empresa
+    existente, cambiar país, marcar para omitir, etc."""
+    item = db.obtener_import_item(item_id)
+    if not item: return err("Item no encontrado", 404)
+
+    b = request.json or {}
+    campos = {}
+    if "accion" in b:
+        accion = b["accion"]
+        if accion not in ACCIONES_ITEM_VALIDAS:
+            return err(f"Acción inválida: {accion!r}")
+        campos["accion"] = accion
+        # Si pasa a 'omitir', el estado refleja eso; si se corrige, ya no
+        # 'requiere_revision' por defecto (el usuario decidió qué hacer).
+        if accion == "omitir":
+            campos["estado"] = "omitido"
+        elif item["estado"] == "omitido":
+            campos["estado"] = "pendiente"
+    if "empresa_id" in b:
+        eid = to_int(b.get("empresa_id"), 0, lo=0)
+        if eid and not db.obtener_empresa_por_id(eid):
+            return err("Empresa no encontrada")
+        campos["empresa_id"] = eid or None
+    if "pais_detectado" in b:
+        campos["pais_detectado"] = clean(b.get("pais_detectado")) or None
+
+    if not campos:
+        return err("Nada para actualizar")
+    if not db.actualizar_import_item(item_id, **campos):
+        return err("No se pudo actualizar el item")
+    return ok(db.obtener_import_item(item_id))
+
+
+def _ejecutar_commit_batch(batch_id):
+    """Lógica real de commit, sin el guard de estado de la ruta pública —
+    la usan tanto /commit como /retry_errors (que necesita poder re-correr
+    el commit sobre un batch ya 'completado' con errores pendientes)."""
+    db.actualizar_import_batch(batch_id, estado="committing")
+    items = db.listar_import_items(batch_id, limit=100000)
+
+    creados = actualizados = errores = 0
+    for item in items:
+        if item["estado"] in ("omitido", "importado"):
+            continue
+        try:
+            # Anti-duplicado por hash (si se calculó) además de por ruta
+            if item["file_hash"] and db.cotizacion_existe_por_hash(item["file_hash"]):
+                db.actualizar_import_item(item["id"], estado="omitido",
+                                          error="Duplicado por hash")
+                continue
+
+            empresa_id = item["empresa_id"]
+            if item["accion"] == "crear":
+                nombre = item["empresa_detectada"] or os.path.splitext(item["file_name"])[0]
+                # Por si dos items del mismo batch detectan la misma empresa nueva
+                existente = db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+                if existente:
+                    empresa_id = existente["id"]
+                else:
+                    if not db.agregar_empresa(nombre, "", "", "", "",
+                                              item["pais_detectado"] or "", ""):
+                        raise RuntimeError(f"No se pudo crear empresa {nombre!r}")
+                    nueva = db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+                    empresa_id = nueva["id"] if nueva else None
+                    creados += 1
+            elif item["accion"] == "usar_existente":
+                if not empresa_id:
+                    raise RuntimeError("accion='usar_existente' sin empresa_id asignado")
+                actualizados += 1
+            else:
+                continue  # 'omitir' ya filtrado arriba, no debería llegar acá
+
+            if not empresa_id:
+                raise RuntimeError("No se pudo resolver la empresa destino")
+
+            ok_cot = db.agregar_cotizacion_con_ruta(
+                empresa_id, "", 0, None, item["file_path"],
+                archivo_hash=item["file_hash"])
+            if not ok_cot:
+                raise RuntimeError("No se pudo insertar la cotización")
+
+            db.actualizar_import_item(item["id"], estado="importado",
+                                      empresa_id=empresa_id,
+                                      fecha_procesado=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception as e:
+            errores += 1
+            db.actualizar_import_item(item["id"], estado="error", error=str(e))
+
+    # Acumula sobre los contadores previos (relevante para retry_errors,
+    # que vuelve a llamar esto sobre un batch que ya tenía creados/actualizados
+    # de una corrida anterior).
+    batch_prev = db.obtener_import_batch(batch_id)
+    db.actualizar_import_batch(
+        batch_id, estado="completado",
+        creados=(batch_prev["creados"] or 0) + creados,
+        actualizados=(batch_prev["actualizados"] or 0) + actualizados,
+        errores=errores,  # errores es un conteo actual, no acumulado: si se
+                          # corrigieron, no deben seguir contando como error
+        fecha_commit=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    return db.obtener_import_batch(batch_id)
+
+
+@app.route("/api/import_batches/<int:batch_id>/commit", methods=["POST"])
+def import_batch_commit(batch_id):
+    """
+    Confirma el batch: para cada item no omitido, crea la empresa (si
+    accion='crear') o usa la existente (si accion='usar_existente'), e
+    inserta la cotización. Un error en un item no frena el resto —
+    el item queda en estado 'error' con el mensaje, y se puede reintentar
+    con /retry_errors sin tocar los que ya se importaron bien.
+    """
+    batch = db.obtener_import_batch(batch_id)
+    if not batch: return err("Batch no encontrado", 404)
+    if batch["estado"] in ("completado", "committing"):
+        return err(f"El batch ya está en estado {batch['estado']!r}")
+    return ok(_ejecutar_commit_batch(batch_id))
+
+
+@app.route("/api/import_batches/<int:batch_id>/retry_errors", methods=["POST"])
+def import_batch_retry_errors(batch_id):
+    """Reintenta solo los items en estado 'error' del batch, sin tocar
+    los que ya están 'importado' u 'omitido'."""
+    batch = db.obtener_import_batch(batch_id)
+    if not batch: return err("Batch no encontrado", 404)
+
+    errores_items = db.listar_import_items(batch_id, estado="error", limit=100000)
+    if not errores_items:
+        return ok({"reintentados": 0, "mensaje": "No hay items en error"})
+
+    for item in errores_items:
+        db.actualizar_import_item(item["id"], estado="pendiente", error=None)
+
+    return ok(_ejecutar_commit_batch(batch_id))
+
+
+@app.route("/api/import_batches/<int:batch_id>/cancel", methods=["POST"])
+def import_batch_cancel(batch_id):
+    batch = db.obtener_import_batch(batch_id)
+    if not batch: return err("Batch no encontrado", 404)
+    if batch["estado"] == "completado":
+        return err("No se puede cancelar un batch ya completado")
+    if not db.actualizar_import_batch(batch_id, estado="cancelado"):
+        return err("No se pudo cancelar")
+    return ok(db.obtener_import_batch(batch_id))
+
+
 if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 5000))

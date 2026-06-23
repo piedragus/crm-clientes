@@ -5798,6 +5798,212 @@ class TestImportadorJerarquiasAnidadas(unittest.TestCase):
 
 
 
+
+
+# =====================================================================
+# Sprint D — staging de importación (import_batches / import_items)
+# =====================================================================
+class TestImportBatchStaging(unittest.TestCase):
+    """Tests mínimos pedidos en el issue de Sprint D:
+    - Scan crea batch e items sin tocar cotizaciones definitivas.
+    - Commit importa solo items válidos.
+    - Item duplicado por hash se omite.
+    - Corrección manual de empresa cambia destino antes de commit.
+    - Error en un item no frena todo el batch.
+    """
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db     = _db
+        self.tmpdir = tempfile.mkdtemp()
+        self.creadas = []
+        self.batches = []
+
+        os.makedirs(os.path.join(self.tmpdir, "ClienteStagingA"))
+        os.makedirs(os.path.join(self.tmpdir, "ClienteStagingB"))
+        with open(os.path.join(self.tmpdir, "ClienteStagingA", "c1.pdf"), "w") as f:
+            f.write("%PDF-1.4 contenido A")
+        with open(os.path.join(self.tmpdir, "ClienteStagingB", "c2.pdf"), "w") as f:
+            f.write("%PDF-1.4 contenido B")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in self.creadas:
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+        for bid in self.batches:
+            with self.db._get_connection() as conn:
+                conn.execute("DELETE FROM import_batches WHERE id=?", (bid,))
+                conn.commit()
+
+    def _scan(self, path=None):
+        r = self.client.post("/api/import_batches/scan", json={"path": path or self.tmpdir})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.batches.append(d["batch_id"])
+        return d
+
+    def test_scan_crea_batch_e_items_sin_tocar_cotizaciones(self):
+        n_cot_antes = self.db.fetchone("SELECT COUNT(*) as n FROM cotizaciones")["n"]
+        d = self._scan()
+        self.assertEqual(d["total_items"], 2)
+        batch = self.db.obtener_import_batch(d["batch_id"])
+        self.assertEqual(batch["estado"], "preview")
+        n_cot_despues = self.db.fetchone("SELECT COUNT(*) as n FROM cotizaciones")["n"]
+        self.assertEqual(n_cot_antes, n_cot_despues,
+            "El scan no debe insertar cotizaciones definitivas")
+        items = self.db.listar_import_items(d["batch_id"])
+        self.assertEqual(len(items), 2)
+        for item in items:
+            self.assertEqual(item["estado"], "requiere_revision")
+
+    def test_commit_importa_solo_items_validos(self):
+        d = self._scan()
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+        r = self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self.assertEqual(r.status_code, 200)
+        batch = r.get_json()["data"]
+        self.assertEqual(batch["estado"], "completado")
+        self.assertEqual(batch["creados"], 2)
+        self.assertEqual(batch["errores"], 0)
+        for nombre in ("ClienteStagingA", "ClienteStagingB"):
+            emp = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            self.assertIsNotNone(emp, f"{nombre} debe haberse creado")
+            cot = self.db.fetchall(
+                "SELECT * FROM cotizaciones WHERE empresa_id=?", (emp["id"],))
+            self.assertEqual(len(cot), 1)
+
+    def test_item_duplicado_por_hash_se_omite(self):
+        # Importar el primer archivo "manualmente" simulando que ya existe
+        # una cotización con el mismo hash (ej. el archivo se copió a otra
+        # carpeta y se escaneó desde ahí con una ruta distinta).
+        ok_empresa = self.db.agregar_empresa("ClienteStagingA", "", "", "", "", "", "")
+        self.assertTrue(ok_empresa)
+        self.creadas.append("ClienteStagingA")
+        emp = self.db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteStagingA'")
+        from server import file_sha256
+        ruta_a = os.path.join(self.tmpdir, "ClienteStagingA", "c1.pdf")
+        hash_a = file_sha256(ruta_a)
+        self.db.agregar_cotizacion_con_ruta(
+            emp["id"], "", 0, None, "/otra/ruta/copia.pdf", archivo_hash=hash_a)
+
+        d = self._scan()
+        # Forzar el file_hash en el item (el scan no lo calcula por defecto)
+        items = self.db.listar_import_items(d["batch_id"])
+        item_a = next(i for i in items if i["file_path"] == ruta_a)
+        self.db.actualizar_import_item(item_a["id"], file_hash=hash_a, accion="crear")
+
+        r = self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self.assertEqual(r.status_code, 200)
+        item_final = self.db.obtener_import_item(item_a["id"])
+        self.assertEqual(item_final["estado"], "omitido")
+        self.assertIn("hash", (item_final["error"] or "").lower())
+        # No debe haber creado una segunda cotización para ese archivo
+        self.creadas.append("ClienteStagingB")
+
+    def test_correccion_manual_cambia_destino_antes_de_commit(self):
+        self.db.agregar_empresa("EmpresaDestino", "", "", "", "", "Chile", "")
+        self.creadas.append("EmpresaDestino")
+        destino = self.db.fetchone("SELECT id FROM empresas WHERE nombre='EmpresaDestino'")
+
+        d = self._scan()
+        self.creadas.append("ClienteStagingB")  # el otro item sigue creando empresa nueva
+        items = self.db.listar_import_items(d["batch_id"])
+        item_a = next(i for i in items if "ClienteStagingA" in i["file_path"])
+
+        r = self.client.patch(f"/api/import_items/{item_a['id']}", json={
+            "accion": "usar_existente", "empresa_id": destino["id"]})
+        self.assertEqual(r.status_code, 200)
+        item_corregido = r.get_json()["data"]
+        self.assertEqual(item_corregido["accion"], "usar_existente")
+        self.assertEqual(item_corregido["empresa_id"], destino["id"])
+
+        self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        # No debe haberse creado "ClienteStagingA" como empresa nueva
+        a_creada = self.db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteStagingA'")
+        self.assertIsNone(a_creada, "ClienteStagingA no debe crearse, se redirigió a EmpresaDestino")
+        cot_destino = self.db.fetchall(
+            "SELECT * FROM cotizaciones WHERE empresa_id=?", (destino["id"],))
+        self.assertEqual(len(cot_destino), 1)
+
+    def test_error_en_un_item_no_frena_todo_el_batch(self):
+        d = self._scan()
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+        items = self.db.listar_import_items(d["batch_id"])
+        item_malo = items[0]
+        # Forzar un error real: usar_existente sin empresa_id
+        self.db.actualizar_import_item(item_malo["id"], accion="usar_existente", empresa_id=None)
+
+        r = self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self.assertEqual(r.status_code, 200)
+        batch = r.get_json()["data"]
+        self.assertEqual(batch["errores"], 1)
+        self.assertEqual(batch["creados"], 1, "El otro item debe haberse importado igual")
+
+        item_bueno = items[1]
+        final_bueno = self.db.obtener_import_item(item_bueno["id"])
+        final_malo  = self.db.obtener_import_item(item_malo["id"])
+        self.assertEqual(final_bueno["estado"], "importado")
+        self.assertEqual(final_malo["estado"], "error")
+        self.assertIsNotNone(final_malo["error"])
+
+    def test_retry_errors_reintenta_solo_los_que_fallaron(self):
+        d = self._scan()
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+        items = self.db.listar_import_items(d["batch_id"])
+        item_malo = items[0]
+        self.db.actualizar_import_item(item_malo["id"], accion="usar_existente", empresa_id=None)
+
+        self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self.assertEqual(self.db.obtener_import_item(item_malo["id"])["estado"], "error")
+
+        # Corregir la causa real del error y reintentar
+        r_patch = self.client.patch(f"/api/import_items/{item_malo['id']}",
+                                    json={"accion": "crear"})
+        self.assertEqual(r_patch.status_code, 200)
+
+        r = self.client.post(f"/api/import_batches/{d['batch_id']}/retry_errors")
+        self.assertEqual(r.status_code, 200)
+        batch = r.get_json()["data"]
+        self.assertEqual(batch["errores"], 0)
+        self.assertEqual(self.db.obtener_import_item(item_malo["id"])["estado"], "importado")
+
+    def test_cancel_batch_no_completado(self):
+        d = self._scan()
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+        r = self.client.post(f"/api/import_batches/{d['batch_id']}/cancel")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["data"]["estado"], "cancelado")
+
+    def test_cancel_batch_completado_falla(self):
+        d = self._scan()
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+        self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        r = self.client.post(f"/api/import_batches/{d['batch_id']}/cancel")
+        self.assertEqual(r.status_code, 400)
+
+    def test_segundo_scan_sobre_misma_carpeta_omite_archivos_en_vuelo(self):
+        """Peer review de PR #19: dos batches escaneando la misma carpeta
+        sin que el primero haga commit no deben generar duplicados — el
+        segundo scan debe ver esos archivos como 'omitido', no volver a
+        ofrecerlos para corrección."""
+        d1 = self._scan()  # batch 1 sigue en 'preview', sin commit
+        d2 = self._scan()  # mismo path, batch 2
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+
+        self.assertEqual(d2["requiere_revision"], 0,
+            "El segundo scan no debe ofrecer para revisión archivos ya en vuelo en batch 1")
+        self.assertEqual(d2["omitido"], 2)
+
+        items_b2 = self.db.listar_import_items(d2["batch_id"])
+        for item in items_b2:
+            self.assertEqual(item["estado"], "omitido")
+            self.assertIn(f"batch #{d1['batch_id']}", item["error"])
+
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = loader.loadTestsFromModule(__import__(__name__))
