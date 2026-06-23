@@ -1835,6 +1835,21 @@ def import_batch_scan():
                        db.fetchall("SELECT ruta_archivo FROM cotizaciones")
                        if r.get("ruta_archivo")}
 
+    # Rutas ya en vuelo en OTRO batch que todavía no terminó. Sin esto, dos
+    # batches escaneando la misma carpeta sin que el primero haga commit
+    # generan archivos duplicados en ambos — el segundo commit los rechaza
+    # uno por uno con errores incomprensibles ("ya existe") en vez de un
+    # aviso claro desde el preview.
+    rutas_en_otros_batches = {
+        (r["file_path"], r["batch_id"]) for r in db.fetchall("""
+            SELECT DISTINCT i.file_path, i.batch_id
+            FROM import_items i
+            JOIN import_batches b ON b.id = i.batch_id
+            WHERE b.estado NOT IN ('completado', 'cancelado', 'error')
+        """)
+    }
+    rutas_bloqueadas = {fp: bid for fp, bid in rutas_en_otros_batches}
+
     batch_id = db.crear_import_batch("masivo_staging", path, metadata={"thresh": thresh})
     if not batch_id:
         return err("No se pudo crear el batch")
@@ -1857,6 +1872,18 @@ def import_batch_scan():
                 empresa_detectada=empresa_nombre, pais_detectado=pais_detectado,
                 estado="omitido", accion="omitir",
                 error="Ya importado anteriormente (misma ruta)")
+            continue
+
+        # En vuelo en otro batch que todavía no se completó/canceló: evita
+        # que dos importaciones simultáneas sobre la misma carpeta terminen
+        # creando duplicados o rebotando con errores confusos al hacer commit.
+        if fpath in rutas_bloqueadas:
+            counts["omitido"] += 1
+            db.agregar_import_item(
+                batch_id, fpath, fname,
+                empresa_detectada=empresa_nombre, pais_detectado=pais_detectado,
+                estado="omitido", accion="omitir",
+                error=f"Bloqueado por otro proceso de importación abierto (batch #{rutas_bloqueadas[fpath]})")
             continue
 
         # 1. Alias exacto (Sprint B) gana siempre sobre fuzzy

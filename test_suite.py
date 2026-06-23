@@ -5985,6 +5985,24 @@ class TestImportBatchStaging(unittest.TestCase):
         r = self.client.post(f"/api/import_batches/{d['batch_id']}/cancel")
         self.assertEqual(r.status_code, 400)
 
+    def test_segundo_scan_sobre_misma_carpeta_omite_archivos_en_vuelo(self):
+        """Peer review de PR #19: dos batches escaneando la misma carpeta
+        sin que el primero haga commit no deben generar duplicados — el
+        segundo scan debe ver esos archivos como 'omitido', no volver a
+        ofrecerlos para corrección."""
+        d1 = self._scan()  # batch 1 sigue en 'preview', sin commit
+        d2 = self._scan()  # mismo path, batch 2
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+
+        self.assertEqual(d2["requiere_revision"], 0,
+            "El segundo scan no debe ofrecer para revisión archivos ya en vuelo en batch 1")
+        self.assertEqual(d2["omitido"], 2)
+
+        items_b2 = self.db.listar_import_items(d2["batch_id"])
+        for item in items_b2:
+            self.assertEqual(item["estado"], "omitido")
+            self.assertIn(f"batch #{d1['batch_id']}", item["error"])
+
 
 if __name__ == "__main__":
     loader = unittest.TestLoader()
