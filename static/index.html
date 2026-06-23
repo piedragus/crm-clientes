@@ -375,6 +375,7 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <div class="tools-item" onclick="closeToolsMenu();showImportCSV()">📧 CSV de mails / contactos</div>
           <div class="tools-item" onclick="closeToolsMenu();showImportMasivo()">🚀 Importación masiva (miles de archivos)</div>
           <div class="tools-item" onclick="closeToolsMenu();showImportCarpeta()">📁 Carpeta de cotizaciones (manual)</div>
+          <div class="tools-item" onclick="closeToolsMenu();showBatchImport()">📦 Importación con revisión (preview antes de confirmar)</div>
           <div class="tools-sep"></div>
           <div class="tools-section">BÚSQUEDA</div>
           <div class="tools-item" onclick="closeToolsMenu();showLimpieza()">🧹 Limpiar y unificar empresas</div>
@@ -958,6 +959,77 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     </div>
   </div>
 
+  <!-- Sprint D: Importación con staging (preview/corrección/commit) -->
+  <div class="modal" id="batch-modal" style="display:none;width:1100px;max-width:97vw">
+    <div class="modal-header">
+      <span>📦 Importación con revisión</span>
+      <button class="modal-close" onclick="closeModal('batch-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Paso 1: escanear -->
+      <div id="batch-step-scan" style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <input id="batch-path" placeholder="Ruta de la carpeta a escanear"
+               style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:4px">
+        <button class="btn btn-primary" id="btn-batch-scan" onclick="batchScan()">🔍 Escanear</button>
+      </div>
+
+      <!-- Paso 2: preview + corrección (oculto hasta tener un batch) -->
+      <div id="batch-step-preview" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div id="batch-summary" style="font-size:12px;color:var(--txt2)"></div>
+          <div style="display:flex;gap:6px">
+            <select id="batch-filter" onchange="batchLoadItems()"
+                    style="font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:4px">
+              <option value="">Todos</option>
+              <option value="requiere_revision">Requiere revisión</option>
+              <option value="match_auto">Automáticos (match)</option>
+              <option value="error">Errores</option>
+              <option value="importado">Importados</option>
+              <option value="omitido">Omitidos</option>
+            </select>
+            <button class="btn btn-ghost" onclick="batchScan()" id="btn-batch-rescan" style="font-size:11px">↻ Re-escanear</button>
+          </div>
+        </div>
+
+        <div style="max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:4px">
+          <table class="sub-table" style="width:100%;font-size:11px">
+            <thead><tr>
+              <th>Archivo</th>
+              <th>Empresa detectada</th>
+              <th>País</th>
+              <th>Estado</th>
+              <th>Acción</th>
+              <th>Empresa destino</th>
+            </tr></thead>
+            <tbody id="batch-items-body"></tbody>
+          </table>
+        </div>
+
+        <div id="batch-progress" style="display:none;margin-top:8px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)">
+            <span id="batch-prog-label">Importando…</span>
+            <span id="batch-prog-count"></span>
+          </div>
+          <div style="background:var(--border);border-radius:99px;height:6px;margin-top:4px;overflow:hidden">
+            <div id="batch-prog-bar" style="height:100%;background:var(--accent);
+                 border-radius:99px;width:0%;transition:width .3s"></div>
+          </div>
+        </div>
+      </div>
+
+      <datalist id="batch-empresas-datalist"></datalist>
+    </div>
+
+    <div class="modal-footer">
+      <span id="batch-footer-status" style="color:var(--muted);font-size:11px;margin-right:auto"></span>
+      <button class="btn btn-ghost" id="btn-batch-cancel" onclick="batchCancel()" style="display:none">Cancelar batch</button>
+      <button class="btn btn-warn" id="btn-batch-retry" onclick="batchRetryErrors()" style="display:none">Reintentar errores</button>
+      <button class="btn btn-ok" id="btn-batch-commit" onclick="batchCommit()" style="display:none">✓ Confirmar e importar</button>
+      <button class="btn btn-ghost" onclick="closeModal('batch-modal')">Cerrar</button>
+    </div>
+  </div>
+
   <!-- Importación masiva -->
   <div class="modal" id="bulk-import-modal" style="display:none;width:640px;max-width:96vw">
     <div class="modal-header">
@@ -1224,10 +1296,11 @@ async function api(method, url, body) {
   const r = await fetch(url, opts);
   return r.json();
 }
-const GET  = url      => api("GET", url);
-const POST = (u, b)   => api("POST", u, b);
-const PUT  = (u, b)   => api("PUT",  u, b);
-const DEL  = url      => api("DELETE", url);
+const GET   = url      => api("GET", url);
+const POST  = (u, b)   => api("POST", u, b);
+const PUT   = (u, b)   => api("PUT",  u, b);
+const PATCH = (u, b)   => api("PATCH", u, b);
+const DEL   = url      => api("DELETE", url);
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 function toast(msg, type="ok") {
@@ -2193,6 +2266,191 @@ async function importarMasivo() {
 
 // ── Importar carpeta ──────────────────────────────────────────────────────────
 function showImportCarpeta() { openModal("importer-modal"); }
+
+// ── Sprint D: Importación con staging (preview/corrección/commit) ────────────
+const BATCH = {id: null, empresas: [], empresasByName: {}};
+
+function showBatchImport() {
+  BATCH.id = null;
+  document.getElementById("batch-path").value = "";
+  document.getElementById("batch-step-preview").style.display = "none";
+  document.getElementById("batch-progress").style.display = "none";
+  document.getElementById("batch-footer-status").textContent = "";
+  ["btn-batch-cancel", "btn-batch-retry", "btn-batch-commit"].forEach(id =>
+    document.getElementById(id).style.display = "none");
+  openModal("batch-modal");
+}
+
+async function batchScan() {
+  const path = document.getElementById("batch-path").value.trim();
+  if (!path) { toast("Ingresá una ruta", "err"); return; }
+
+  const btn = document.getElementById("btn-batch-scan");
+  btn.disabled = true; btn.textContent = "Escaneando…";
+  try {
+    const r = await POST("/api/import_batches/scan", {path});
+    if (!r.ok) { toast(r.error || "Error", "err"); return; }
+    BATCH.id = r.data.batch_id;
+
+    // Cargar empresas para el autocomplete de "empresa destino"
+    const re = await GET("/api/empresas?page_size=10000");
+    if (re.ok) {
+      BATCH.empresas = re.data;
+      BATCH.empresasByName = {};
+      re.data.forEach(e => BATCH.empresasByName[e.nombre.toLowerCase()] = e.id);
+      document.getElementById("batch-empresas-datalist").innerHTML =
+        re.data.map(e => `<option value="${esc(e.nombre)}">`).join("");
+    }
+
+    document.getElementById("batch-step-preview").style.display = "";
+    document.getElementById("btn-batch-rescan").textContent = "↻ Re-escanear";
+    toast(`Escaneo completo: ${r.data.total_items} archivo(s)`);
+    await batchRefreshInfo();
+    await batchLoadItems();
+  } finally {
+    btn.disabled = false; btn.textContent = "🔍 Escanear";
+  }
+}
+
+async function batchRefreshInfo() {
+  if (!BATCH.id) return;
+  const r = await GET(`/api/import_batches/${BATCH.id}`);
+  if (!r.ok) return;
+  const b = r.data;
+  const c = b.conteo_por_estado || {};
+  document.getElementById("batch-summary").innerHTML =
+    `Batch #${b.id} — <b>${b.total_items}</b> archivos — ` +
+    `${c.match_auto || 0} automáticos, ${c.requiere_revision || 0} a revisar, ` +
+    `${c.importado || 0} importados, ${c.error || 0} con error, ${c.omitido || 0} omitidos ` +
+    `— estado: <b>${b.estado}</b>`;
+
+  const btnCommit = document.getElementById("btn-batch-commit");
+  const btnRetry  = document.getElementById("btn-batch-retry");
+  const btnCancel = document.getElementById("btn-batch-cancel");
+  btnCommit.style.display = b.estado === "completado" ? "none" : "";
+  btnRetry.style.display  = (c.error || 0) > 0 ? "" : "none";
+  btnCancel.style.display = b.estado === "completado" ? "none" : "";
+  document.getElementById("batch-footer-status").textContent =
+    b.fecha_commit ? `Último commit: ${b.fecha_commit}` : "";
+}
+
+async function batchLoadItems() {
+  if (!BATCH.id) return;
+  const estado = document.getElementById("batch-filter").value;
+  const url = `/api/import_batches/${BATCH.id}/items` + (estado ? `?estado=${estado}` : "");
+  const r = await GET(url);
+  if (!r.ok) { toast(r.error || "Error", "err"); return; }
+
+  const colorEstado = {
+    match_auto: "var(--row-g)", importado: "var(--row-g)",
+    requiere_revision: "var(--row-a)", pendiente: "var(--row-a)",
+    error: "var(--row-r)", omitido: "var(--row-n)",
+  };
+
+  document.getElementById("batch-items-body").innerHTML = r.data.map(item => {
+    const editable = !["importado"].includes(item.estado);
+    const empresaActual = BATCH.empresas.find(e => e.id === item.empresa_id);
+    return `<tr style="background:${colorEstado[item.estado] || ''}" data-item-id="${item.id}">
+      <td title="${esc(item.file_path)}">${esc(item.file_name)}</td>
+      <td>${esc(item.empresa_detectada || "")}</td>
+      <td>${esc(item.pais_detectado || "")}</td>
+      <td>${item.estado}${item.error ? ` <span title="${esc(item.error)}" style="cursor:help">⚠</span>` : ""}</td>
+      <td>
+        <select ${editable ? "" : "disabled"} onchange="batchChangeAccion(${item.id}, this.value)"
+                style="font-size:10px;padding:1px 3px">
+          <option value="crear" ${item.accion === "crear" ? "selected" : ""}>Crear nueva</option>
+          <option value="usar_existente" ${item.accion === "usar_existente" ? "selected" : ""}>Usar existente</option>
+          <option value="omitir" ${item.accion === "omitir" ? "selected" : ""}>Omitir</option>
+        </select>
+      </td>
+      <td>
+        <input ${editable && item.accion === "usar_existente" ? "" : "disabled"}
+               list="batch-empresas-datalist" value="${esc(empresaActual ? empresaActual.nombre : "")}"
+               placeholder="Buscar empresa…" style="font-size:10px;width:140px;padding:1px 3px"
+               onchange="batchChangeEmpresa(${item.id}, this.value)">
+      </td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="6" style="text-align:center;padding:12px;color:var(--muted)">Sin items</td></tr>`;
+}
+
+async function batchChangeAccion(itemId, accion) {
+  const sel = document.querySelector(`tr[data-item-id="${itemId}"] select`);
+  if (sel) sel.disabled = true;
+  try {
+    const r = await PATCH(`/api/import_items/${itemId}`, {accion});
+    if (!r.ok) { toast(r.error || "Error", "err"); return; }
+    await batchLoadItems();
+    await batchRefreshInfo();
+  } finally {
+    if (sel) sel.disabled = false;
+  }
+}
+
+async function batchChangeEmpresa(itemId, nombre) {
+  const input = document.querySelector(`tr[data-item-id="${itemId}"] input[list]`);
+  const eid = BATCH.empresasByName[nombre.trim().toLowerCase()];
+  if (!eid) {
+    if (input) input.style.borderColor = nombre.trim() ? "var(--danger)" : "var(--border)";
+    if (nombre.trim()) toast("Empresa no encontrada — elegí una de la lista", "err");
+    return;
+  }
+  if (input) { input.style.borderColor = "var(--border)"; input.disabled = true; }
+  try {
+    const r = await PATCH(`/api/import_items/${itemId}`,
+      {accion: "usar_existente", empresa_id: eid});
+    if (!r.ok) { toast(r.error || "Error", "err"); return; }
+    await batchLoadItems();
+  } finally {
+    if (input) input.disabled = false;
+  }
+}
+
+async function batchCommit() {
+  if (!BATCH.id) return;
+  if (!confirm("¿Confirmar e importar? Esto va a crear empresas y cotizaciones definitivas.")) return;
+
+  document.getElementById("batch-progress").style.display = "";
+  document.getElementById("batch-prog-label").textContent = "Importando…";
+  document.getElementById("batch-prog-bar").style.width = "50%";
+  document.getElementById("btn-batch-commit").disabled = true;
+
+  try {
+    const r = await POST(`/api/import_batches/${BATCH.id}/commit`);
+    if (!r.ok) { toast(r.error || "Error", "err"); return; }
+    document.getElementById("batch-prog-bar").style.width = "100%";
+    const b = r.data;
+    toast(`✓ ${b.creados} creadas, ${b.actualizados} actualizadas` +
+          (b.errores ? ` | ${b.errores} con error` : ""), b.errores ? "err" : "ok");
+    await Promise.all([loadEmpresas(), loadStats()]);
+    await batchRefreshInfo();
+    await batchLoadItems();
+  } finally {
+    document.getElementById("btn-batch-commit").disabled = false;
+    setTimeout(() => document.getElementById("batch-progress").style.display = "none", 1200);
+  }
+}
+
+async function batchRetryErrors() {
+  if (!BATCH.id) return;
+  const r = await POST(`/api/import_batches/${BATCH.id}/retry_errors`);
+  if (!r.ok) { toast(r.error || "Error", "err"); return; }
+  toast(r.data.mensaje || "Reintento completado");
+  await Promise.all([loadEmpresas(), loadStats()]);
+  await batchRefreshInfo();
+  await batchLoadItems();
+}
+
+async function batchCancel() {
+  if (!BATCH.id) return;
+  if (!confirm("¿Cancelar este batch? Los items quedan sin importar.")) return;
+  const r = await POST(`/api/import_batches/${BATCH.id}/cancel`);
+  if (!r.ok) { toast(r.error || "Error", "err"); return; }
+  toast("Batch cancelado");
+  await batchRefreshInfo();
+  await batchLoadItems();
+}
+
+
 
 // Scan state
 const SCAN = { offset: 0, limit: 200, total: 0, thresh: 60 };
