@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import json
 import logging
 import threading
 from typing import List, Dict, Tuple, Optional
@@ -197,10 +198,43 @@ class DBManager:
                         tag_id INTEGER,
                         PRIMARY KEY (empresa_id, tag_id),
                         FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE CASCADE,
-                        FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE)'''
+                        FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE)''',
+                    '''CREATE TABLE IF NOT EXISTS import_batches (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        origen TEXT NOT NULL,
+                        root_path TEXT NOT NULL,
+                        estado TEXT NOT NULL DEFAULT 'preview',
+                        total_items INTEGER DEFAULT 0,
+                        creados INTEGER DEFAULT 0,
+                        actualizados INTEGER DEFAULT 0,
+                        omitidos INTEGER DEFAULT 0,
+                        errores INTEGER DEFAULT 0,
+                        fecha_creacion TEXT DEFAULT CURRENT_TIMESTAMP,
+                        fecha_commit TEXT,
+                        metadata_json TEXT)''',
+                    '''CREATE TABLE IF NOT EXISTS import_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        batch_id INTEGER NOT NULL,
+                        file_path TEXT NOT NULL,
+                        file_name TEXT,
+                        file_hash TEXT,
+                        empresa_detectada TEXT,
+                        empresa_id INTEGER,
+                        pais_detectado TEXT,
+                        estado TEXT NOT NULL DEFAULT 'pendiente',
+                        accion TEXT NOT NULL DEFAULT 'crear',
+                        confianza INTEGER,
+                        error TEXT,
+                        metadata_json TEXT,
+                        fecha_procesado TEXT,
+                        UNIQUE(batch_id, file_path),
+                        FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE,
+                        FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE SET NULL)'''
                 ]
                 for tabla in tablas:
                     c.execute(tabla)
+                c.execute("CREATE INDEX IF NOT EXISTS idx_import_items_batch ON import_items(batch_id, estado)")
+                c.execute("CREATE INDEX IF NOT EXISTS idx_import_items_hash ON import_items(file_hash)")
                     
                 # Migración para añadir columna de país a contactos si no existe
                 c.execute("PRAGMA table_info(contactos)")
@@ -974,7 +1008,115 @@ class DBManager:
             logging.error(f"Error al agregar cotización con ruta: {e}")
             return False
 
+    # ── Sprint D: staging de importación (import_batches / import_items) ──────
 
+    def crear_import_batch(self, origen: str, root_path: str, metadata: dict = None) -> int | None:
+        """Crea un batch de importación en estado 'preview'. Devuelve el id."""
+        try:
+            with self._get_connection() as conn:
+                cur = conn.execute(
+                    "INSERT INTO import_batches (origen, root_path, metadata_json) VALUES (?, ?, ?)",
+                    (origen, root_path, json.dumps(metadata) if metadata else None))
+                conn.commit()
+                return cur.lastrowid
+        except Exception as e:
+            logging.error(f"Error al crear import_batch: {e}")
+            return None
+
+    def agregar_import_item(self, batch_id: int, file_path: str, file_name: str,
+                            file_hash: str = None, empresa_detectada: str = None,
+                            empresa_id: int = None, pais_detectado: str = None,
+                            estado: str = "pendiente", accion: str = "crear",
+                            confianza: int = None, error: str = None,
+                            metadata: dict = None) -> int | None:
+        """Agrega un item al batch. UNIQUE(batch_id, file_path) evita
+        duplicados si se re-escanea el mismo batch (no debería pasar, pero
+        protege ante doble-click en 'Escanear')."""
+        try:
+            with self._get_connection() as conn:
+                cur = conn.execute("""
+                    INSERT INTO import_items
+                        (batch_id, file_path, file_name, file_hash, empresa_detectada,
+                         empresa_id, pais_detectado, estado, accion, confianza, error, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(batch_id, file_path) DO NOTHING
+                """, (batch_id, file_path, file_name, file_hash, empresa_detectada,
+                      empresa_id, pais_detectado, estado, accion, confianza, error,
+                      json.dumps(metadata) if metadata else None))
+                conn.commit()
+                return cur.lastrowid
+        except Exception as e:
+            logging.error(f"Error al agregar import_item: {e}")
+            return None
+
+    def obtener_import_batch(self, batch_id: int) -> dict | None:
+        row = self.fetchone("SELECT * FROM import_batches WHERE id=?", (batch_id,))
+        return dict(row) if row else None
+
+    def listar_import_items(self, batch_id: int, estado: str = None,
+                            offset: int = 0, limit: int = 200) -> list:
+        if estado:
+            return self.fetchall(
+                "SELECT * FROM import_items WHERE batch_id=? AND estado=? "
+                "ORDER BY id LIMIT ? OFFSET ?",
+                (batch_id, estado, limit, offset))
+        return self.fetchall(
+            "SELECT * FROM import_items WHERE batch_id=? ORDER BY id LIMIT ? OFFSET ?",
+            (batch_id, limit, offset))
+
+    def contar_import_items_por_estado(self, batch_id: int) -> dict:
+        rows = self.fetchall(
+            "SELECT estado, COUNT(*) as n FROM import_items WHERE batch_id=? GROUP BY estado",
+            (batch_id,))
+        return {r["estado"]: r["n"] for r in rows}
+
+    def obtener_import_item(self, item_id: int) -> dict | None:
+        row = self.fetchone("SELECT * FROM import_items WHERE id=?", (item_id,))
+        return dict(row) if row else None
+
+    def actualizar_import_item(self, item_id: int, **campos) -> bool:
+        """Actualiza columnas arbitrarias de un item (corrección manual:
+        accion, empresa_id, pais_detectado, estado, error, file_hash)."""
+        permitidos = {"accion", "empresa_id", "pais_detectado", "estado",
+                      "error", "file_hash", "empresa_detectada", "confianza",
+                      "fecha_procesado"}
+        campos = {k: v for k, v in campos.items() if k in permitidos}
+        if not campos:
+            return False
+        try:
+            with self._get_connection() as conn:
+                set_sql = ", ".join(f"{k}=?" for k in campos)
+                conn.execute(f"UPDATE import_items SET {set_sql} WHERE id=?",
+                            (*campos.values(), item_id))
+                conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Error al actualizar import_item {item_id}: {e}")
+            return False
+
+    def actualizar_import_batch(self, batch_id: int, **campos) -> bool:
+        permitidos = {"estado", "total_items", "creados", "actualizados",
+                      "omitidos", "errores", "fecha_commit", "metadata_json"}
+        campos = {k: v for k, v in campos.items() if k in permitidos}
+        if not campos:
+            return False
+        try:
+            with self._get_connection() as conn:
+                set_sql = ", ".join(f"{k}=?" for k in campos)
+                conn.execute(f"UPDATE import_batches SET {set_sql} WHERE id=?",
+                            (*campos.values(), batch_id))
+                conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Error al actualizar import_batch {batch_id}: {e}")
+            return False
+
+    def cotizacion_existe_por_hash(self, file_hash: str) -> bool:
+        if not file_hash:
+            return False
+        row = self.fetchone(
+            "SELECT id FROM cotizaciones WHERE archivo_hash=? LIMIT 1", (file_hash,))
+        return row is not None
 
     def editar_cotizacion(self, cotizacion_id: int, descripcion: str,
                           monto: float, tipo: str = None,
