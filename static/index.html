@@ -1384,6 +1384,8 @@ async function loadEmpresas() {
   S.serverPages   = r.pages || 1;
   // No local paging needed — server already paged at 100
   S.page = 0;
+  if (S.sortCol) applySort();      // mantiene el orden elegido por el usuario
+  else S.filtered = S.allEmpresas; // sin orden activo, mostrar tal cual vino del server
   renderList();
 }
 
