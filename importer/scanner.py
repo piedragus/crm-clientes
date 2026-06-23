@@ -16,6 +16,14 @@ orden que devuelve el filesystem) y uno sí (`sorted(files)`). Cambiar
 ese orden sin querer altera qué aparece primero en listas paginadas de
 la UI — por eso `sort_files` es explícito y por defecto False (orden
 de filesystem, igual que el código original sin sorted()).
+
+NOTA (issue #12): `sort_files=True` también ordena `dirs` in-place,
+para que el recorrido de subcarpetas sea 100% determinístico entre
+sistemas operativos (Linux y Windows pueden devolver el orden de
+`os.walk` distinto). Esto es un cambio de comportamiento real respecto
+al código original (que nunca ordenaba `dirs`, ver server.py antes de
+Sprint C) — se aplica solo bajo el mismo flag `sort_files` para no
+afectar a los call sites que dependen del orden de filesystem.
 """
 import os
 
@@ -32,11 +40,15 @@ def walk_files(walk_root, extensions=None, *, relative_to=None, sort_files=False
       pero la cadena de carpetas debe incluir su propio nombre relativo
       a un ancestro común (ver importar_subcarpetas en server.py).
     - sort_files: si True, ordena los archivos de cada carpeta
-      alfabéticamente antes de iterarlos. Default False: respeta el
-      orden que devuelve el filesystem (igual que os.walk sin sorted()).
+      alfabéticamente antes de iterarlos, Y ordena las subcarpetas
+      in-place para que el recorrido completo sea determinístico
+      entre sistemas operativos. Default False: respeta el orden que
+      devuelve el filesystem (igual que os.walk sin sorted()).
     """
     base = relative_to or walk_root
-    for root, _, files in os.walk(walk_root):
+    for root, dirs, files in os.walk(walk_root):
+        if sort_files:
+            dirs.sort()  # determinismo también en el orden de subcarpetas
         rel_root = os.path.relpath(root, base)
         folder_chain = [] if rel_root == "." else rel_root.replace("\\", "/").split("/")
         names = sorted(files) if sort_files else files

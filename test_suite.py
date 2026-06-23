@@ -24,11 +24,13 @@ Grupos:
 
 import sys, os, sqlite3, unittest, threading, time, random, string, json
 import tempfile, shutil, csv
+from unittest.mock import patch
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
 from db_manager import DBManager
 from utils import formatear_fecha, CSVCleaner
+from importer.scanner import walk_files
 
 def fresh_db():
     return DBManager(":memory:")
@@ -5613,8 +5615,189 @@ class TestDBAliases(unittest.TestCase):
         self.assertIsNotNone(emp)
 
 
-# RUNNER
 # =====================================================================
+# importer/scanner.py — walk_files()
+# =====================================================================
+class TestWalkFiles(unittest.TestCase):
+    """Tests para importer.scanner.walk_files() (issues #12, #13)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _crear_arbol(self, base):
+        """Crea una jerarquía de 3 niveles con nombres deliberadamente
+        no alfabéticos en orden de creación, para detectar tanto
+        problemas de orden de archivos como de orden de subcarpetas."""
+        os.makedirs(os.path.join(base, "Zeta", "Sub2"))
+        os.makedirs(os.path.join(base, "Alfa", "Sub1"))
+        for path, names in [
+            (os.path.join(base, "Zeta"), ["z2.pdf", "z1.pdf"]),
+            (os.path.join(base, "Zeta", "Sub2"), ["zs2.pdf", "zs1.pdf"]),
+            (os.path.join(base, "Alfa"), ["a2.pdf", "a1.pdf"]),
+            (os.path.join(base, "Alfa", "Sub1"), ["as2.pdf", "as1.pdf"]),
+        ]:
+            for n in names:
+                with open(os.path.join(path, n), "w") as f:
+                    f.write("%PDF-1.4")
+
+    def test_filtra_por_extension(self):
+        self._crear_arbol(self.tmpdir)
+        with open(os.path.join(self.tmpdir, "Zeta", "nota.txt"), "w") as f:
+            f.write("no es pdf")
+        resultados = list(walk_files(self.tmpdir, {".pdf"}))
+        self.assertTrue(all(f[1].endswith(".pdf") for f in resultados))
+        self.assertEqual(len(resultados), 8)  # 8 pdfs creados en _crear_arbol
+
+    def test_sin_extensiones_no_filtra(self):
+        self._crear_arbol(self.tmpdir)
+        resultados = list(walk_files(self.tmpdir, extensions=None))
+        self.assertEqual(len(resultados), 8)
+
+    def test_folder_chain_relativo_a_walk_root_por_default(self):
+        self._crear_arbol(self.tmpdir)
+        resultados = list(walk_files(self.tmpdir, {".pdf"}))
+        chains = {tuple(f[2]) for f in resultados}
+        self.assertIn(("Zeta",), chains)
+        self.assertIn(("Zeta", "Sub2"), chains)
+        self.assertIn(("Alfa",), chains)
+        self.assertIn(("Alfa", "Sub1"), chains)
+
+    def test_relative_to_distinto_de_walk_root(self):
+        """Caso real: importar_subcarpetas camina sub_path pero la
+        cadena de carpetas debe incluir el nombre de sub_path relativo
+        a la carpeta padre elegida por el usuario."""
+        self._crear_arbol(self.tmpdir)
+        sub_path = os.path.join(self.tmpdir, "Zeta")
+        resultados = list(walk_files(sub_path, {".pdf"}, relative_to=self.tmpdir))
+        chains = {tuple(f[2]) for f in resultados}
+        self.assertIn(("Zeta",), chains)
+        self.assertIn(("Zeta", "Sub2"), chains)
+        # No debe haber resultados de Alfa, no se caminó esa rama
+        for fpath, fname, chain in resultados:
+            self.assertNotIn("Alfa", chain)
+
+    def test_sort_files_false_preserva_orden_de_filesystem(self):
+        """sort_files=False (default) no debe alterar el orden que
+        devuelve os.walk — se simula con os.walk mockeado para no
+        depender de que el filesystem real preserve orden de creación."""
+        with patch("importer.scanner.os.walk") as mock_walk:
+            mock_walk.return_value = [
+                ("/base", ["Zeta", "Alfa"], ["z.pdf", "a.pdf"]),
+            ]
+            resultados = list(walk_files("/base", {".pdf"}, sort_files=False))
+            nombres = [f[1] for f in resultados]
+            self.assertEqual(nombres, ["z.pdf", "a.pdf"])  # sin ordenar
+
+    def test_sort_files_true_ordena_archivos_y_subcarpetas(self):
+        """issue #12: sort_files=True debe ordenar tanto los archivos
+        de cada carpeta como la lista de subcarpetas (in-place, para
+        que os.walk recorra en ese orden), independientemente de lo
+        que devuelva el filesystem subyacente."""
+        with patch("importer.scanner.os.walk") as mock_walk:
+            dirs_root = ["Zeta", "Alfa"]
+            mock_walk.return_value = [
+                ("/base", dirs_root, ["z.pdf", "a.pdf"]),
+            ]
+            resultados = list(walk_files("/base", {".pdf"}, sort_files=True))
+            nombres = [f[1] for f in resultados]
+            self.assertEqual(nombres, ["a.pdf", "z.pdf"])  # ordenado
+            # dirs debe haber sido mutada in-place a orden alfabético
+            self.assertEqual(dirs_root, ["Alfa", "Zeta"])
+
+
+# =====================================================================
+# importar_masivo / importar_empresas_desde_carpeta con jerarquías
+# anidadas (issue #13)
+# =====================================================================
+class TestImportadorJerarquiasAnidadas(unittest.TestCase):
+    """
+    Surgido del peer review de PR #11: el refactor de scanner.py
+    introdujo 2 bugs de indentación que los 522 tests existentes no
+    detectaron porque los fixtures de esos endpoints eran carpetas
+    planas. Estos tests usan una jerarquía real de 3 niveles, con
+    archivos válidos e inválidos mezclados en distintas profundidades,
+    y hacen assertEqual estricto contra el resultado (cantidades
+    exactas), no solo "no crashea".
+    """
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db     = _db
+        self.tmpdir = tempfile.mkdtemp()
+        self.creadas = []  # nombres de empresa para limpiar en tearDown
+
+        # Jerarquía de 3 niveles:
+        # tmpdir/
+        #   PaisA/
+        #     ClienteUno/        <- nombre de empresa esperado: ClienteUno
+        #       cotizacion1.pdf
+        #       cotizacion2.pdf
+        #     Sub/ClienteDos/    <- nombre de empresa esperado: ClienteDos
+        #       cotizacion3.pdf
+        #   ClienteSuelto01.pdf  <- archivo suelto en la raíz, sin carpeta cliente
+        #   nota.jpg             <- extensión no soportada por ningún importer, debe ignorarse
+        os.makedirs(os.path.join(self.tmpdir, "PaisA", "ClienteUno"))
+        os.makedirs(os.path.join(self.tmpdir, "PaisA", "Sub", "ClienteDos"))
+        files = {
+            os.path.join(self.tmpdir, "PaisA", "ClienteUno", "cotizacion1.pdf"): "%PDF-1.4",
+            os.path.join(self.tmpdir, "PaisA", "ClienteUno", "cotizacion2.pdf"): "%PDF-1.4",
+            os.path.join(self.tmpdir, "PaisA", "Sub", "ClienteDos", "cotizacion3.pdf"): "%PDF-1.4",
+            os.path.join(self.tmpdir, "ClienteSuelto01.pdf"): "%PDF-1.4",
+            os.path.join(self.tmpdir, "nota.jpg"): "no es un documento",
+        }
+        for path, content in files.items():
+            with open(path, "w") as f:
+                f.write(content)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in self.creadas:
+            row = self.db.fetchone(
+                "SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+
+    def test_importar_masivo_jerarquia_anidada(self):
+        r = self.client.post("/api/importar/masivo", json={"path": self.tmpdir})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.creadas += ["ClienteUno", "ClienteDos", "ClienteSuelto"]
+
+        # 4 PDFs válidos (cotizacion1/2/3 + el suelto), nota.txt ignorada
+        self.assertEqual(d["cotizaciones_importadas"], 4)
+        self.assertEqual(d["empresas_creadas"], 3)  # ClienteUno, ClienteDos, ClienteSuelto
+
+        emp_uno = self.db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteUno'")
+        emp_dos = self.db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteDos'")
+        self.assertIsNotNone(emp_uno, "ClienteUno (nivel 2) debe haberse creado")
+        self.assertIsNotNone(emp_dos, "ClienteDos (nivel 3, dentro de Sub/) debe haberse creado")
+
+        cot_uno = self.db.fetchall(
+            "SELECT * FROM cotizaciones WHERE empresa_id=?", (emp_uno["id"],))
+        cot_dos = self.db.fetchall(
+            "SELECT * FROM cotizaciones WHERE empresa_id=?", (emp_dos["id"],))
+        self.assertEqual(len(cot_uno), 2, "ClienteUno debe tener sus 2 cotizaciones")
+        self.assertEqual(len(cot_dos), 1, "ClienteDos (anidado en Sub/) debe tener su cotización")
+
+    def test_importar_empresas_desde_carpeta_jerarquia_anidada(self):
+        r = self.client.post("/api/importar/empresas-desde-carpeta",
+                             json={"path": self.tmpdir})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.creadas += ["ClienteUno", "ClienteDos", "ClienteSuelto"]
+
+        self.assertEqual(d["creadas"], 3)
+        nombres_creados = {e["nombre"] for e in self.db.fetchall(
+            "SELECT nombre FROM empresas WHERE nombre IN ('ClienteUno','ClienteDos','ClienteSuelto')")}
+        self.assertEqual(nombres_creados, {"ClienteUno", "ClienteDos", "ClienteSuelto"})
+
+
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = loader.loadTestsFromModule(__import__(__name__))
