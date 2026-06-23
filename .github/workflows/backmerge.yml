@@ -1,0 +1,52 @@
+name: Backmerge main -> develop
+
+# Cada vez que algo se mergea a main (un PR normal, o un hotfix de
+# emergencia pusheado directo), abre automáticamente un PR de
+# main -> develop si hay commits en main que develop todavía no tiene.
+#
+# Motivo: en esta sesión, commits hechos directo en main (paginación,
+# y el hotfix de S.filtered) quedaron sin sincronizar a develop dos
+# veces, causando conflictos de merge evitables y, peor, que develop
+# quedara basado en una versión vieja del frontend. Este workflow
+# evita que eso pase desapercibido hasta el próximo PR grande.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  backmerge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if main is ahead of develop
+        id: check
+        run: |
+          git fetch origin develop main
+          AHEAD=$(git rev-list --count origin/develop..origin/main)
+          echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
+          echo "main está $AHEAD commit(s) adelante de develop"
+
+      - name: Create backmerge PR if needed
+        if: steps.check.outputs.ahead != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Si ya existe un PR abierto main->develop, no crear otro
+          EXISTING=$(gh pr list --base develop --head main --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            echo "Ya existe el PR #$EXISTING, no se crea uno nuevo"
+            exit 0
+          fi
+          gh pr create \
+            --base develop \
+            --head main \
+            --title "🔄 Backmerge automático: main -> develop" \
+            --body "Generado automáticamente: \`main\` tiene commits que \`develop\` todavía no tiene (probablemente un hotfix pusheado directo a \`main\` por urgencia). Mergear este PR para que \`develop\` no quede desactualizado — evita conflictos evitables en el próximo PR grande."
