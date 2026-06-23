@@ -2374,22 +2374,35 @@ async function batchLoadItems() {
 }
 
 async function batchChangeAccion(itemId, accion) {
-  const r = await PATCH(`/api/import_items/${itemId}`, {accion});
-  if (!r.ok) { toast(r.error || "Error", "err"); return; }
-  await batchLoadItems();
-  await batchRefreshInfo();
+  const sel = document.querySelector(`tr[data-item-id="${itemId}"] select`);
+  if (sel) sel.disabled = true;
+  try {
+    const r = await PATCH(`/api/import_items/${itemId}`, {accion});
+    if (!r.ok) { toast(r.error || "Error", "err"); return; }
+    await batchLoadItems();
+    await batchRefreshInfo();
+  } finally {
+    if (sel) sel.disabled = false;
+  }
 }
 
 async function batchChangeEmpresa(itemId, nombre) {
+  const input = document.querySelector(`tr[data-item-id="${itemId}"] input[list]`);
   const eid = BATCH.empresasByName[nombre.trim().toLowerCase()];
   if (!eid) {
+    if (input) input.style.borderColor = nombre.trim() ? "var(--danger)" : "var(--border)";
     if (nombre.trim()) toast("Empresa no encontrada — elegí una de la lista", "err");
     return;
   }
-  const r = await PATCH(`/api/import_items/${itemId}`,
-    {accion: "usar_existente", empresa_id: eid});
-  if (!r.ok) { toast(r.error || "Error", "err"); return; }
-  await batchLoadItems();
+  if (input) { input.style.borderColor = "var(--border)"; input.disabled = true; }
+  try {
+    const r = await PATCH(`/api/import_items/${itemId}`,
+      {accion: "usar_existente", empresa_id: eid});
+    if (!r.ok) { toast(r.error || "Error", "err"); return; }
+    await batchLoadItems();
+  } finally {
+    if (input) input.disabled = false;
+  }
 }
 
 async function batchCommit() {
