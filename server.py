@@ -151,19 +151,17 @@ def ejecutar_resumen_bg(cotizacion_id):
         def _valor_final(campo, valor_llm):
             existente = db.obtener_campo_extraido(cotizacion_id, campo)
             if existente and existente["estado"] == "manual_confirmado":
+                logging.info(f"extraccion[{cotizacion_id}].{campo}: respeta corrección manual ({existente['valor']!r}), no se reprocesa")
                 return existente["valor"]
             if campo in campos_det:
                 valor_det, confianza_det = campos_det[campo]
                 from extraccion.constants import UMBRAL_CONFIANZA_OK
                 if confianza_det >= UMBRAL_CONFIANZA_OK:
-                    # Ya se guardó en extraccion_campos arriba con estado 'ok'.
+                    logging.info(f"extraccion[{cotizacion_id}].{campo}: capa determinística, valor={valor_det!r} confianza={confianza_det}")
                     return valor_det
-                # Confianza insuficiente: queda registrado como
-                # 'pendiente_revision' (ya guardado arriba), pero NO se usa
-                # como valor "confirmado" en la columna legacy — mostrar un
-                # dato de baja confianza sin marcarlo sería justo el "dato
-                # falso" que el issue pide evitar.
+                logging.info(f"extraccion[{cotizacion_id}].{campo}: capa determinística encontró {valor_det!r} con confianza={confianza_det} (< {UMBRAL_CONFIANZA_OK}) — queda pendiente_revision, no se usa como valor confirmado")
             if valor_llm is not None:
+                logging.info(f"extraccion[{cotizacion_id}].{campo}: capa determinística sin resultado, usando LLM, valor={valor_llm!r}")
                 db.guardar_campo_extraido(cotizacion_id, campo, valor_llm,
                                           fuente="ia_llm",
                                           confianza=data.get("confianza"),
@@ -173,6 +171,7 @@ def ejecutar_resumen_bg(cotizacion_id):
             # dejar pendiente de revisión (si ya quedó un row de la capa
             # determinística con baja confianza, no lo pisamos: ya refleja
             # el estado correcto de 'pendiente_revision').
+            logging.info(f"extraccion[{cotizacion_id}].{campo}: ninguna capa encontró un valor confiable — pendiente_revision")
             if campo not in campos_det:
                 db.guardar_campo_extraido(cotizacion_id, campo, None,
                                           fuente="ia_llm", confianza=0,
@@ -381,7 +380,24 @@ def get_cotizaciones(eid):
 def get_cotizacion(cid):
     r = db.get_cotizacion_por_id(cid)
     if not r: return err("No encontrada", 404)
-    return ok(dict(r))
+    data = dict(r)
+    # Sprint E (review PR #28): adjuntar candidatos de baja confianza sin
+    # tocar los campos legacy (monto/moneda siguen viniendo de la tabla
+    # 'cotizaciones', vacíos si no hay confianza suficiente). Así un
+    # cliente de la API que solo mire 'monto'/'moneda' sigue viendo el
+    # comportamiento de siempre, y el que necesite el detalle lo encuentra
+    # en 'extraccion' sin pegarle a un segundo endpoint.
+    campos_pendientes = [
+        c for c in db.obtener_campos_extraidos(cid)
+        if c["estado"] == "pendiente_revision" and c["valor"] is not None
+    ]
+    if campos_pendientes:
+        data["extraccion"] = {
+            c["campo"]: {"valor_candidato": c["valor"], "estado": c["estado"],
+                        "confianza": c["confianza"], "fuente": c["fuente"]}
+            for c in campos_pendientes
+        }
+    return ok(data)
 
 @app.route("/api/empresas/<int:eid>/cotizaciones", methods=["POST"])
 def post_cotizacion(eid):
