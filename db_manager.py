@@ -229,12 +229,25 @@ class DBManager:
                         fecha_procesado TEXT,
                         UNIQUE(batch_id, file_path),
                         FOREIGN KEY (batch_id) REFERENCES import_batches (id) ON DELETE CASCADE,
-                        FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE SET NULL)'''
+                        FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE SET NULL)''',
+                    '''CREATE TABLE IF NOT EXISTS extraccion_campos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        cotizacion_id INTEGER NOT NULL,
+                        campo TEXT NOT NULL,
+                        valor TEXT,
+                        fuente TEXT NOT NULL,
+                        confianza REAL,
+                        estado TEXT NOT NULL DEFAULT 'pendiente_revision',
+                        snapshot_texto TEXT,
+                        fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(cotizacion_id, campo),
+                        FOREIGN KEY (cotizacion_id) REFERENCES cotizaciones (id) ON DELETE CASCADE)'''
                 ]
                 for tabla in tablas:
                     c.execute(tabla)
                 c.execute("CREATE INDEX IF NOT EXISTS idx_import_items_batch ON import_items(batch_id, estado)")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_import_items_hash ON import_items(file_hash)")
+                c.execute("CREATE INDEX IF NOT EXISTS idx_extraccion_campos_cot ON extraccion_campos(cotizacion_id)")
                     
                 # Migración para añadir columna de país a contactos si no existe
                 c.execute("PRAGMA table_info(contactos)")
@@ -1117,6 +1130,70 @@ class DBManager:
         row = self.fetchone(
             "SELECT id FROM cotizaciones WHERE archivo_hash=? LIMIT 1", (file_hash,))
         return row is not None
+
+    # ── Sprint E: trazabilidad de extracción por campo ─────────────────────────
+
+    def guardar_campo_extraido(self, cotizacion_id: int, campo: str, valor,
+                               fuente: str, confianza: float = None,
+                               estado: str = None, snapshot_texto: str = None,
+                               forzar: bool = False) -> bool:
+        """
+        Guarda (o actualiza) el valor extraído de un campo, con su fuente
+        y confianza. Si el campo ya está en estado 'manual_confirmado' y
+        forzar=False, NO pisa el valor — esto es lo que protege las
+        correcciones manuales de ser sobrescritas en un reprocesamiento
+        automático (requisito explícito del issue de Sprint E).
+
+        valor se guarda como TEXT (str(valor)) para soportar cualquier
+        tipo de campo (número, fecha, texto) en una sola tabla genérica;
+        el caller es responsable de convertir al tipo correcto al leer.
+        """
+        if estado is None:
+            from extraccion.constants import UMBRAL_CONFIANZA_OK
+            estado = "ok" if (confianza or 0) >= UMBRAL_CONFIANZA_OK else "pendiente_revision"
+        try:
+            with self._get_connection() as conn:
+                if not forzar:
+                    actual = conn.execute(
+                        "SELECT estado FROM extraccion_campos WHERE cotizacion_id=? AND campo=?",
+                        (cotizacion_id, campo)).fetchone()
+                    if actual and actual["estado"] == "manual_confirmado":
+                        return True  # no es un error, simplemente no se tocó a propósito
+                conn.execute("""
+                    INSERT INTO extraccion_campos
+                        (cotizacion_id, campo, valor, fuente, confianza, estado, snapshot_texto, fecha_actualizacion)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(cotizacion_id, campo) DO UPDATE SET
+                        valor=excluded.valor, fuente=excluded.fuente,
+                        confianza=excluded.confianza, estado=excluded.estado,
+                        snapshot_texto=excluded.snapshot_texto,
+                        fecha_actualizacion=CURRENT_TIMESTAMP
+                """, (cotizacion_id, campo, None if valor is None else str(valor),
+                      fuente, confianza, estado, snapshot_texto))
+                conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Error al guardar campo extraído ({cotizacion_id}, {campo}): {e}")
+            return False
+
+    def corregir_campo_manual(self, cotizacion_id: int, campo: str, valor) -> bool:
+        """Corrección humana: fuente='manual', estado='manual_confirmado'.
+        Usa forzar=True porque una corrección manual siempre debe poder
+        pisar lo que hubiera antes (incluso otra corrección manual previa)."""
+        return self.guardar_campo_extraido(
+            cotizacion_id, campo, valor, fuente="manual",
+            confianza=1.0, estado="manual_confirmado", forzar=True)
+
+    def obtener_campos_extraidos(self, cotizacion_id: int) -> list:
+        return self.fetchall(
+            "SELECT * FROM extraccion_campos WHERE cotizacion_id=? ORDER BY campo",
+            (cotizacion_id,))
+
+    def obtener_campo_extraido(self, cotizacion_id: int, campo: str) -> dict | None:
+        row = self.fetchone(
+            "SELECT * FROM extraccion_campos WHERE cotizacion_id=? AND campo=?",
+            (cotizacion_id, campo))
+        return dict(row) if row else None
 
     def editar_cotizacion(self, cotizacion_id: int, descripcion: str,
                           monto: float, tipo: str = None,
