@@ -126,13 +126,68 @@ def ejecutar_resumen_bg(cotizacion_id):
             except Exception as exc: logging.warning(f"Hash: {exc}")
         from extractor_texto import extraer
         from resumidor import resumir
+        from extraccion import extraer_campos_deterministicos
         texto = extraer(ruta)
-        data  = resumir(texto)
+
+        # Capa 1 (Sprint E): regex determinística, sin LLM. Snapshot corto
+        # del texto para poder auditar después por qué se eligió ese valor.
+        snapshot = (texto or "")[:500]
+        campos_det = extraer_campos_deterministicos(texto)
+        for campo, (valor, confianza) in campos_det.items():
+            db.guardar_campo_extraido(cotizacion_id, campo, valor,
+                                      fuente="texto_directo", confianza=confianza,
+                                      snapshot_texto=snapshot)
+
+        # Capa 2: LLM (Gemini/Grok), siempre se llama por los campos que la
+        # capa 1 no puede resolver (resumen, tipo, proveedor) — pero para
+        # monto/moneda solo se usa su resultado si la capa 1 no encontró nada.
+        data = resumir(texto)
+
+        # Resolver el valor FINAL de monto/moneda con prioridad:
+        # manual_confirmado > capa determinística > LLM > pendiente_revision.
+        # Las columnas legacy de 'cotizaciones' (que lee el resto de la app)
+        # se actualizan con este valor final para no duplicar lógica en cada
+        # endpoint que las consulta.
+        def _valor_final(campo, valor_llm):
+            existente = db.obtener_campo_extraido(cotizacion_id, campo)
+            if existente and existente["estado"] == "manual_confirmado":
+                return existente["valor"]
+            if campo in campos_det:
+                valor_det, confianza_det = campos_det[campo]
+                from extraccion.constants import UMBRAL_CONFIANZA_OK
+                if confianza_det >= UMBRAL_CONFIANZA_OK:
+                    # Ya se guardó en extraccion_campos arriba con estado 'ok'.
+                    return valor_det
+                # Confianza insuficiente: queda registrado como
+                # 'pendiente_revision' (ya guardado arriba), pero NO se usa
+                # como valor "confirmado" en la columna legacy — mostrar un
+                # dato de baja confianza sin marcarlo sería justo el "dato
+                # falso" que el issue pide evitar.
+            if valor_llm is not None:
+                db.guardar_campo_extraido(cotizacion_id, campo, valor_llm,
+                                          fuente="ia_llm",
+                                          confianza=data.get("confianza"),
+                                          snapshot_texto=snapshot)
+                return valor_llm
+            # Nadie encontró nada con confianza suficiente — no inventar,
+            # dejar pendiente de revisión (si ya quedó un row de la capa
+            # determinística con baja confianza, no lo pisamos: ya refleja
+            # el estado correcto de 'pendiente_revision').
+            if campo not in campos_det:
+                db.guardar_campo_extraido(cotizacion_id, campo, None,
+                                          fuente="ia_llm", confianza=0,
+                                          estado="pendiente_revision",
+                                          snapshot_texto=snapshot)
+            return None
+
+        monto_final  = _valor_final("monto",  data.get("monto"))
+        moneda_final = _valor_final("moneda", data.get("moneda"))
+
         ok2   = db.actualizar_resumen_cotizacion_por_ruta(
             row["empresa_id"], ruta,
             resumen=data.get("resumen",""),
-            monto=data.get("monto"),
-            moneda=data.get("moneda"),
+            monto=monto_final,
+            moneda=moneda_final,
             proveedor_ia=data.get("proveedor_ia","none"),
             tipo=data.get("tipo"))
         if not ok2:
@@ -1787,6 +1842,44 @@ def get_estado_ia(cid):
         "monto":        row.get("monto"),
         "moneda":       row.get("moneda",""),
     })
+
+# ── Sprint E: trazabilidad de extracción por campo ────────────────────────────
+@app.route("/api/cotizaciones/<int:cid>/extraccion")
+def get_extraccion_campos(cid):
+    """Lista los campos extraídos de esta cotización con su fuente,
+    confianza y estado — para que el usuario vea por qué se eligió
+    cada valor (texto directo, IA, nombre de archivo, o corrección manual)."""
+    if not db.get_cotizacion_por_id(cid):
+        return err("Cotización no encontrada", 404)
+    return ok(db.obtener_campos_extraidos(cid))
+
+@app.route("/api/cotizaciones/<int:cid>/extraccion/<campo>", methods=["PATCH"])
+def patch_extraccion_campo(cid, campo):
+    """Corrección manual de un campo extraído. Queda marcado como
+    'manual_confirmado' — un reprocesamiento futuro (reintentar IA,
+    re-escanear el batch) NO lo va a pisar."""
+    from extraccion import CAMPOS_VALIDOS
+    if campo not in CAMPOS_VALIDOS:
+        return err(f"Campo inválido: {campo!r}. Válidos: {sorted(CAMPOS_VALIDOS)}")
+    if not db.get_cotizacion_por_id(cid):
+        return err("Cotización no encontrada", 404)
+    b = request.json or {}
+    if "valor" not in b:
+        return err("Falta 'valor'")
+    if not db.corregir_campo_manual(cid, campo, b["valor"]):
+        return err("No se pudo guardar la corrección")
+    # Si el campo corregido es monto o moneda, reflejarlo también en la
+    # columna legacy de cotizaciones (que es la que lee el resto de la UI).
+    if campo in ("monto", "moneda"):
+        row = db.get_cotizacion_por_id(cid)
+        db.actualizar_resumen_cotizacion_por_ruta(
+            row["empresa_id"], row["ruta_archivo"],
+            resumen=row.get("resumen",""),
+            monto=to_float(b["valor"]) if campo == "monto" else row.get("monto"),
+            moneda=b["valor"] if campo == "moneda" else row.get("moneda"),
+            proveedor_ia=row.get("proveedor_ia","none"),
+            tipo=row.get("tipo"))
+    return ok(db.obtener_campo_extraido(cid, campo))
 
 
 # ── Sprint D: staging de importación (preview/corrección/commit) ─────────────

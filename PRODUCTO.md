@@ -154,14 +154,18 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 
 ---
 
-### 🔜 Sprint E — Extracción avanzada de PDF
-*Requiere Sprint D*
+### 🟡 Sprint E — Extracción avanzada de PDF y trazabilidad
+*En curso*
 
-- Extraer texto real del PDF (pdfplumber / pdfminer)
-- Parsear: número de cotización, monto, moneda, proveedor, fecha desde el contenido
-- Enriquecimiento con IA (Gemini / GPT) para campos no estructurados
-- Confianza de extracción por campo
-- Revisión manual de campos de baja confianza en UI
+- [x] **Capa determinística** (`extraccion/campos.py`): regex sobre el texto extraído, sin LLM, sin red, 100% testeable. Cubre monto, moneda, fecha del documento. Reutiliza el mismo parser de números AR/US que ya existía en `resumidor.py`, con un bug de ambigüedad corregido (`"2.500"` → 2500, no 2.5).
+- [x] **Trazabilidad por campo** (`extraccion_campos`, nueva tabla): cada campo extraído queda con `fuente` (texto_directo/ia_llm/manual), `confianza`, `estado` (ok/pendiente_revision/manual_confirmado) y un snapshot del texto usado — auditable desde `GET /api/cotizaciones/<id>/extraccion`.
+- [x] **No inventar datos**: si la confianza no llega al umbral (`UMBRAL_CONFIANZA_OK = 0.7`), el campo queda en `pendiente_revision` y la columna legacy de `cotizaciones` (la que lee el resto de la UI) **no se completa** con el valor de baja confianza — se prefiere mostrarlo vacío a mostrarlo como si estuviera confirmado.
+- [x] **Corrección manual protegida**: `PATCH /api/cotizaciones/<id>/extraccion/<campo>` marca el campo como `manual_confirmado` — un reprocesamiento posterior (reintentar IA, re-escanear) no lo pisa.
+- [x] Pipeline existente (`ejecutar_resumen_bg`) integrado: capa determinística primero, LLM (Gemini/Grok, ya existía) como fallback solo para lo que la capa 1 no resuelve.
+- [ ] **OCR para PDFs escaneados** — pendiente, requiere instalar tesseract/poppler a nivel sistema operativo (no solo `pip install`) y PDFs escaneados reales para validar calidad. No se hizo en esta tanda porque no se puede verificar bien sin esos dos insumos. Ver issue de seguimiento.
+- [ ] Campos `numero_documento`, `cliente_detectado`, `proveedor` (estructurados) — la capa determinística no los cubre (requieren comprensión semántica, no son patrones regex simples); quedan a cargo de la capa LLM existente o corrección manual.
+- [ ] Integración con mail de compras — fuera de alcance de esta sesión, diseño pensado para no bloquearla (la tabla `extraccion_campos` es agnóstica del origen del archivo).
+- UI: no se agregó una vista dedicada para ver/corregir campos por baja confianza — hoy solo existen los endpoints REST. Ver issue de seguimiento.
 
 ---
 

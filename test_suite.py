@@ -6004,6 +6004,161 @@ class TestImportBatchStaging(unittest.TestCase):
             self.assertIn(f"batch #{d1['batch_id']}", item["error"])
 
 
+# =====================================================================
+# Sprint E — extracción de campos con trazabilidad (capa determinística)
+# =====================================================================
+class TestExtraccionDeterministica(unittest.TestCase):
+    """Tests unitarios de extraccion.campos — sin red, sin LLM, sin PDFs
+    reales (no depende de reportlab ni de ninguna librería de generación
+    de PDF que no esté ya en requirements.txt)."""
+
+    def test_monto_y_moneda_se_detectan_juntos(self):
+        from extraccion.campos import extraer_campos_deterministicos
+        r = extraer_campos_deterministicos("Cotización\nTotal: USD 1,500.00\nGracias")
+        self.assertIn("monto", r)
+        self.assertIn("moneda", r)
+        self.assertEqual(r["monto"][0], 1500.0)
+        self.assertEqual(r["moneda"][0], "USD")
+
+    def test_sin_monto_no_inventa_valor(self):
+        from extraccion.campos import extraer_campos_deterministicos
+        r = extraer_campos_deterministicos("Este texto no menciona ningún monto.")
+        self.assertNotIn("monto", r)
+        self.assertNotIn("moneda", r)
+
+    def test_tolera_texto_incompleto_o_vacio(self):
+        from extraccion.campos import extraer_campos_deterministicos
+        # Ninguno de estos debe lanzar excepción
+        self.assertEqual(extraer_campos_deterministicos(""), {})
+        self.assertEqual(extraer_campos_deterministicos(None), {})
+        self.assertEqual(extraer_campos_deterministicos("   "), {})
+        # Texto con basura/caracteres raros no debe crashear
+        r = extraer_campos_deterministicos("a"*10000 + " #$%&* @!!")
+        self.assertIsInstance(r, dict)
+
+    def test_formato_ar_2500_no_se_confunde_con_2_5(self):
+        """Regresión: '$2.500' (formato AR, sin decimales) debe dar 2500,
+        no 2.5 (el punto como separador de miles, no decimal)."""
+        from extraccion.campos import extraer_campos_deterministicos
+        r = extraer_campos_deterministicos("Importe: U$S 2.500")
+        self.assertEqual(r["monto"][0], 2500.0)
+
+    def test_numero_sin_separadores_no_se_corta(self):
+        """Regresión: alternancia de regex se quedaba con el primer match
+        corto ('150' de '15000') en vez de todo el número."""
+        from extraccion.campos import extraer_campos_deterministicos
+        r = extraer_campos_deterministicos("Total $ 15000")
+        self.assertEqual(r["monto"][0], 15000.0)
+
+
+class TestExtraccionTrazabilidad(unittest.TestCase):
+    """Tests de integración del pipeline completo (issue Sprint E,
+    'tests minimos'): fuente/confianza por campo, no inventar valores,
+    y que la corrección manual sobreviva a un reprocesamiento."""
+
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db, ejecutar_resumen_bg as _bg
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db     = _db
+        self.bg     = _bg
+        self.creadas = []
+
+        self.db.agregar_empresa("ClienteExtraccionTest", "", "", "", "", "", "")
+        self.creadas.append("ClienteExtraccionTest")
+        emp = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='ClienteExtraccionTest'")
+        self.empresa_id = emp["id"]
+
+        # Archivo real (vacío) — ejecutar_resumen_bg solo necesita que
+        # os.path.isfile() sea True; el contenido se mockea via extraer().
+        self.tmpfile = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        self.tmpfile.write(b"%PDF-1.4 contenido irrelevante, texto mockeado")
+        self.tmpfile.close()
+
+        self.db.agregar_cotizacion_con_ruta(
+            self.empresa_id, "", 0, None, self.tmpfile.name)
+        cot = self.db.fetchone(
+            "SELECT id FROM cotizaciones WHERE ruta_archivo=?", (self.tmpfile.name,))
+        self.cotizacion_id = cot["id"]
+
+    def tearDown(self):
+        os.unlink(self.tmpfile.name)
+        for nombre in self.creadas:
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+
+    def _correr_pipeline(self, texto_simulado):
+        """Corre ejecutar_resumen_bg con extractor_texto.extraer()
+        mockeado, sin llamar a ningún LLM real (resumidor.py devuelve
+        defaults si no hay API keys configuradas, que es siempre el
+        caso en CI/tests)."""
+        with patch("extractor_texto.extraer", return_value=texto_simulado):
+            self.bg(self.cotizacion_id)
+
+    def test_pdf_con_monto_y_moneda_extrae_ambos(self):
+        self._correr_pipeline("Cotización\nTotal: USD 1,500.00\nGracias")
+        row = self.db.get_cotizacion_por_id(self.cotizacion_id)
+        self.assertEqual(row["monto"], 1500.0)
+        self.assertEqual(row["moneda"], "USD")
+
+    def test_pdf_sin_monto_queda_pendiente_no_inventa_valor(self):
+        self._correr_pipeline("Documento sin ningún monto mencionado.")
+        row = self.db.get_cotizacion_por_id(self.cotizacion_id)
+        # Convención del proyecto: 0.0 significa "sin monto" (no hay NULL,
+        # todas las cotizaciones arrancan en 0 al crearse). Lo importante
+        # es que el pipeline NO haya escrito ningún valor inventado.
+        self.assertEqual(row["monto"] or 0, 0)
+        campo = self.db.obtener_campo_extraido(self.cotizacion_id, "monto")
+        self.assertIsNotNone(campo)
+        self.assertEqual(campo["estado"], "pendiente_revision")
+        self.assertIsNone(campo["valor"])
+
+    def test_correccion_manual_no_se_pisa_en_reprocesamiento(self):
+        self._correr_pipeline("Total: USD 1,500.00")
+        self.assertTrue(
+            self.db.corregir_campo_manual(self.cotizacion_id, "moneda", "EUR"))
+        # Reprocesar con un texto que la capa determinística volvería a
+        # leer como USD — la corrección manual no debe perderse.
+        self._correr_pipeline("Total: USD 1,500.00")
+        row = self.db.get_cotizacion_por_id(self.cotizacion_id)
+        self.assertEqual(row["moneda"], "EUR")
+        campo = self.db.obtener_campo_extraido(self.cotizacion_id, "moneda")
+        self.assertEqual(campo["estado"], "manual_confirmado")
+        self.assertEqual(campo["fuente"], "manual")
+
+    def test_se_guarda_fuente_y_confianza_por_campo(self):
+        self._correr_pipeline("Cotización\nFecha: 15/03/2026\nTotal: USD 1,500.00")
+        campos = self.db.obtener_campos_extraidos(self.cotizacion_id)
+        por_campo = {c["campo"]: c for c in campos}
+        self.assertIn("monto", por_campo)
+        self.assertEqual(por_campo["monto"]["fuente"], "texto_directo")
+        self.assertIsNotNone(por_campo["monto"]["confianza"])
+        self.assertIn("fecha_doc", por_campo)
+        self.assertEqual(por_campo["fecha_doc"]["fuente"], "texto_directo")
+
+    def test_parser_tolera_texto_incompleto_en_pipeline_completo(self):
+        """El pipeline completo (no solo la capa determinística aislada)
+        no debe crashear con texto vacío, None, o basura."""
+        for texto in ("", None, "   ", "#$%&* sin sentido @@@"):
+            self._correr_pipeline(texto)
+            row = self.db.get_cotizacion_por_id(self.cotizacion_id)
+            self.assertEqual(row["estado_ia"], "ok",
+                "el pipeline debe completar sin marcar error aunque no encuentre nada")
+
+    def test_endpoint_patch_extraccion_rechaza_campo_invalido(self):
+        r = self.client.patch(
+            f"/api/cotizaciones/{self.cotizacion_id}/extraccion/campo_que_no_existe",
+            json={"valor": "x"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_endpoint_get_extraccion_cotizacion_inexistente(self):
+        r = self.client.get("/api/cotizaciones/999999/extraccion")
+        self.assertEqual(r.status_code, 404)
+
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = loader.loadTestsFromModule(__import__(__name__))
