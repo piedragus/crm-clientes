@@ -15,17 +15,22 @@ import re
 # Símbolos/códigos de moneda reconocidos, de más a menos específico
 # (para que "U$S" no se confunda con "U" + "S" sueltos, etc.)
 _MONEDA_PATTERNS = [
+    # Nota: el borde derecho usa (?![A-Za-z]) en vez de \b — \b no
+    # distingue letra de dígito, así que "USD3.200" (típico de OCR sin
+    # espacio) no matcheaba con \bUSD\b porque "D" y "3" son ambos
+    # caracteres "word" para \b. (?![A-Za-z]) permite que siga un
+    # dígito pero sigue rechazando "EURO" como si fuera "EUR".
     (r"\bU\$S\b", "USD"),
-    (r"\bUSD\b", "USD"),
+    (r"\bUSD(?![A-Za-z])", "USD"),
     (r"\bDOLARES?\b", "USD"),
     (r"\bAR\$", "ARS"),
-    (r"\bARS\b", "ARS"),
+    (r"\bARS(?![A-Za-z])", "ARS"),
     (r"€", "EUR"),
-    (r"\bEUR\b", "EUR"),
-    (r"\bBRL\b", "BRL"),
+    (r"\bEUR(?![A-Za-z])", "EUR"),
+    (r"\bBRL(?![A-Za-z])", "BRL"),
     (r"\bR\$", "BRL"),
-    (r"\bCLP\b", "CLP"),
-    (r"\bUYU\b", "UYU"),
+    (r"\bCLP(?![A-Za-z])", "CLP"),
+    (r"\bUYU(?![A-Za-z])", "UYU"),
     (r"\$"  , "ARS"),  # "$" suelto: default razonable para cotizaciones AR
 ]
 

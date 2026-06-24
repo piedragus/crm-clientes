@@ -6091,11 +6091,12 @@ class TestExtraccionTrazabilidad(unittest.TestCase):
                 self.db.eliminar_empresa(row["id"])
 
     def _correr_pipeline(self, texto_simulado):
-        """Corre ejecutar_resumen_bg con extractor_texto.extraer()
+        """Corre ejecutar_resumen_bg con extractor_texto.extraer_con_fuente()
         mockeado, sin llamar a ningún LLM real (resumidor.py devuelve
         defaults si no hay API keys configuradas, que es siempre el
         caso en CI/tests)."""
-        with patch("extractor_texto.extraer", return_value=texto_simulado):
+        with patch("extractor_texto.extraer_con_fuente",
+                  return_value=(texto_simulado, "texto_directo")):
             self.bg(self.cotizacion_id)
 
     def test_pdf_con_monto_y_moneda_extrae_ambos(self):
@@ -6157,6 +6158,93 @@ class TestExtraccionTrazabilidad(unittest.TestCase):
     def test_endpoint_get_extraccion_cotizacion_inexistente(self):
         r = self.client.get("/api/cotizaciones/999999/extraccion")
         self.assertEqual(r.status_code, 404)
+
+
+# =====================================================================
+# Sprint E (#26) — OCR de respaldo para PDFs escaneados
+# =====================================================================
+class TestOcrFallback(unittest.TestCase):
+    """
+    Tests de extractor_texto.extraer_con_fuente() y su fallback a OCR.
+
+    Estos tests están pensados para correr en cualquier máquina, CON o
+    SIN tesseract/poppler instalados (ver INSTALACION.md — son binarios
+    de sistema, no solo pip install). Los que necesitan OCR real se
+    saltean limpio si los binarios no están; los que no, corren siempre.
+    """
+
+    def setUp(self):
+        from extractor_texto import _ocr_disponible
+        self.ocr_disponible = _ocr_disponible()
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _crear_pdf_escaneado(self):
+        """PDF sin texto seleccionable (imagen pura) — debe disparar OCR."""
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (800, 300), color="white")
+        draw = ImageDraw.Draw(img)
+        draw.text((30, 30), "Total USD 1500.00", fill="black")
+        draw.text((30, 60), "Fecha: 10/05/2026", fill="black")
+        path = os.path.join(self.tmpdir, "escaneado.pdf")
+        img.save(path, "PDF")
+        return path
+
+    def test_ocr_disponible_no_crashea(self):
+        """La detección de binarios nunca debe lanzar excepción, esté o
+        no instalado tesseract/poppler."""
+        from extractor_texto import _ocr_disponible
+        self.assertIsInstance(_ocr_disponible(), bool)
+
+    def test_ocr_no_disponible_no_rompe_extraccion(self):
+        """Si los binarios no están (mockeado a propósito, corre siempre
+        sin importar el entorno real), un PDF sin texto seleccionable no
+        debe crashear — simplemente no hay OCR, texto queda vacío."""
+        from extractor_texto import extraer_con_fuente
+        path = self._crear_pdf_escaneado()
+        with patch("extractor_texto._ocr_disponible", return_value=False):
+            texto, fuente = extraer_con_fuente(path)
+        self.assertEqual(fuente, "texto_directo")
+        self.assertEqual(texto, "")
+
+    @unittest.skipUnless(
+        __import__("extractor_texto")._ocr_disponible(),
+        "requiere tesseract-ocr + poppler-utils instalados — ver INSTALACION.md")
+    def test_pdf_escaneado_real_dispara_ocr_y_extrae_texto(self):
+        from extractor_texto import extraer_con_fuente
+        path = self._crear_pdf_escaneado()
+        texto, fuente = extraer_con_fuente(path)
+        self.assertEqual(fuente, "ocr")
+        self.assertIn("1500", texto)  # tolerante a imperfecciones de OCR
+                                       # en el resto del texto (USD/Total)
+
+    @unittest.skipUnless(
+        __import__("extractor_texto")._ocr_disponible(),
+        "requiere tesseract-ocr + poppler-utils instalados — ver INSTALACION.md")
+    def test_pipeline_completo_con_pdf_escaneado(self):
+        """Integración: el pipeline completo (capa determinística sobre
+        texto de OCR) extrae monto/moneda de un PDF sin texto seleccionable."""
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db, ejecutar_resumen_bg as _bg
+        _app.config['TESTING'] = True
+        client = _app.test_client()
+
+        _db.agregar_empresa("ClienteOcrTest", "", "", "", "", "", "")
+        emp = _db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteOcrTest'")
+        path = self._crear_pdf_escaneado()
+        _db.agregar_cotizacion_con_ruta(emp["id"], "", 0, None, path)
+        cot = _db.fetchone("SELECT id FROM cotizaciones WHERE ruta_archivo=?", (path,))
+
+        try:
+            _bg(cot["id"])
+            row = _db.get_cotizacion_por_id(cot["id"])
+            self.assertEqual(row["monto"], 1500.0)
+            campo = _db.obtener_campo_extraido(cot["id"], "monto")
+            self.assertEqual(campo["fuente"], "ocr")
+        finally:
+            _db.eliminar_empresa(emp["id"])
 
 
 if __name__ == "__main__":

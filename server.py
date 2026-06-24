@@ -124,18 +124,22 @@ def ejecutar_resumen_bg(cotizacion_id):
         if not row.get("archivo_hash"):
             try: db.actualizar_hash_cotizacion(cotizacion_id, file_sha256(ruta))
             except Exception as exc: logging.warning(f"Hash: {exc}")
-        from extractor_texto import extraer
+        from extractor_texto import extraer_con_fuente
         from resumidor import resumir
         from extraccion import extraer_campos_deterministicos
-        texto = extraer(ruta)
+        texto, fuente_texto = extraer_con_fuente(ruta)
 
         # Capa 1 (Sprint E): regex determinística, sin LLM. Snapshot corto
         # del texto para poder auditar después por qué se eligió ese valor.
+        # fuente_texto es 'ocr' si el PDF no tenía texto seleccionable y se
+        # resolvió vía tesseract (issue #26), o 'texto_directo' en el caso
+        # normal — la trazabilidad refleja de dónde vino el texto de base,
+        # no solo que "una regex" lo encontró.
         snapshot = (texto or "")[:500]
         campos_det = extraer_campos_deterministicos(texto)
         for campo, (valor, confianza) in campos_det.items():
             db.guardar_campo_extraido(cotizacion_id, campo, valor,
-                                      fuente="texto_directo", confianza=confianza,
+                                      fuente=fuente_texto, confianza=confianza,
                                       snapshot_texto=snapshot)
 
         # Capa 2: LLM (Gemini/Grok), siempre se llama por los campos que la
