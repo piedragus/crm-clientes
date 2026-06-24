@@ -1714,9 +1714,11 @@ function renderCotizaciones() {
     }
     const arch = c.nombre_archivo || desc;
     const monto = parseFloat(c.monto||0).toLocaleString("es-AR",{minimumFractionDigits:2});
+    const alerta = c.pendientes_extraccion > 0
+      ? ` <span title="${c.pendientes_extraccion} campo(s) por revisar" style="color:var(--warn)">⚠</span>` : "";
     return `<tr onclick="selCot(${i})" ondblclick="abrirArchivoCot(${i})">
       <td>${esc(c.fecha_fmt||"")}</td>
-      <td>${esc(arch)}</td>
+      <td>${esc(arch)}${alerta}</td>
       <td>${esc(tipo)}</td>
       <td>${esc(c.estado_ia||"")}</td>
       <td style="text-align:right">${esc(c.moneda||"$")}${monto}</td>
@@ -1757,19 +1759,27 @@ async function loadExtraccionPanel(cotId) {
   const NOMBRES = {monto: "Monto", moneda: "Moneda", fecha_doc: "Fecha del documento",
     numero_documento: "N° de documento", cliente_detectado: "Cliente",
     pais_detectado: "País", proveedor: "Proveedor", tipo: "Tipo"};
+  const TIPOS_INPUT = {monto: "number", fecha_doc: "date"};
+  // Para type="date" el input HTML5 necesita yyyy-mm-dd exacto (ya es el
+  // formato que devuelve la capa de extracción, pero por las dudas si
+  // alguna vez llega vacío/inválido, no forzamos el tipo y dejamos texto.
 
   panel.innerHTML = `<div style="font-weight:600;margin-bottom:4px">
       ⚠ Campos a revisar — la extracción automática no tiene suficiente confianza:</div>` +
-    Object.entries(r.data.extraccion).map(([campo, info]) => `
+    Object.entries(r.data.extraccion).map(([campo, info]) => {
+      const tipo = TIPOS_INPUT[campo] || "text";
+      const step = tipo === "number" ? ' step="0.01"' : "";
+      return `
       <div style="display:flex;align-items:center;gap:6px;margin:3px 0">
         <span style="width:140px">${esc(NOMBRES[campo]||campo)}:</span>
         <span style="color:var(--muted)">candidato: <b>${esc(info.valor_candidato)}</b>
           (${Math.round((info.confianza||0)*100)}% confianza)</span>
-        <input id="ext-input-${cotId}-${campo}" value="${esc(info.valor_candidato)}"
+        <input type="${tipo}"${step} id="ext-input-${cotId}-${campo}" value="${esc(info.valor_candidato)}"
                style="width:100px;font-size:11px;padding:2px 4px">
         <button class="btn btn-ghost" style="padding:2px 8px;font-size:10px"
                 onclick="confirmarCampoExtraccion(${cotId}, '${campo}')">Confirmar</button>
-      </div>`).join("");
+      </div>`;
+    }).join("");
   panel.style.display = "";
 }
 
