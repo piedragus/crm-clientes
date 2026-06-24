@@ -369,11 +369,23 @@ def delete_contacto(cid):
 @app.route("/api/empresas/<int:eid>/cotizaciones")
 def get_cotizaciones(eid):
     rows   = db.get_cotizaciones_por_empresa(eid)
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["fecha_fmt"] = formatear_fecha(d.get("fecha",""))
-        result.append(d)
+    result = [dict(r) for r in rows]
+    if result:
+        # Un solo query extra para TODAS las filas (no N+1): cuántos
+        # campos en pendiente_revision tiene cada cotización, para
+        # pintar un ícono de alerta en la lista sin que el usuario
+        # tenga que abrir una por una para enterarse (review PR #29).
+        ids = [r["id"] for r in result]
+        placeholders = ",".join("?" * len(ids))
+        pendientes = {row["cotizacion_id"]: row["n"] for row in db.fetchall(f"""
+            SELECT cotizacion_id, COUNT(*) n FROM extraccion_campos
+            WHERE cotizacion_id IN ({placeholders}) AND estado='pendiente_revision'
+              AND valor IS NOT NULL
+            GROUP BY cotizacion_id
+        """, ids)}
+        for d in result:
+            d["fecha_fmt"] = formatear_fecha(d.get("fecha",""))
+            d["pendientes_extraccion"] = pendientes.get(d["id"], 0)
     return ok(result)
 
 @app.route("/api/cotizaciones/<int:cid>")
