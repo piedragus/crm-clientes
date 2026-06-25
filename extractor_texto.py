@@ -105,7 +105,13 @@ def _ocr_pdf(path: str) -> str:
     """OCR vía pdf2image (rasteriza con poppler) + pytesseract.
     Tolerante a fallos: cualquier excepción de la cadena de binarios
     devuelve '' en vez de propagar — un PDF que no se puede OCRizar no
-    debe romper el resto del pipeline, queda en pendiente_revision."""
+    debe romper el resto del pipeline, queda en pendiente_revision.
+    Pero SÍ se loguea como warning (issue #20): un fallo silencioso acá
+    puede esconder un problema de instalación real (ej. tesseract
+    instalado pero sin el paquete de idioma 'spa'), que de otro modo el
+    usuario nunca se entera que existe — solo vería "el sistema no
+    extrae datos de PDFs escaneados" y asumiría que es un límite del
+    producto, no un problema de infraestructura corregible."""
     try:
         import pytesseract
         from pdf2image import convert_from_path
@@ -117,7 +123,9 @@ def _ocr_pdf(path: str) -> str:
             if t:
                 textos.append(t)
         return _clean("\n".join(textos))
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.warning(f"OCR falló para {path!r}: {e}")
         return ""
 
 

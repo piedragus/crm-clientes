@@ -6209,6 +6209,19 @@ class TestOcrFallback(unittest.TestCase):
         self.assertEqual(fuente, "texto_directo")
         self.assertEqual(texto, "")
 
+    def test_fallo_de_ocr_se_loguea_no_se_traga_en_silencio(self):
+        """issue #20 + peer review PR #30: un fallo real de OCR (ej.
+        paquete de idioma faltante, tesseract mal instalado) debe
+        quedar logueado — silenciarlo del todo escondería un problema
+        de infraestructura que el usuario nunca se enteraría que existe."""
+        from extractor_texto import _ocr_pdf
+        path = self._crear_pdf_escaneado()
+        with patch("pytesseract.image_to_string", side_effect=RuntimeError("tessdata no encontrado")):
+            with self.assertLogs(level="WARNING") as log:
+                resultado = _ocr_pdf(path)
+        self.assertEqual(resultado, "")
+        self.assertTrue(any("OCR falló" in m for m in log.output))
+
     @unittest.skipUnless(
         __import__("extractor_texto")._ocr_disponible(),
         "requiere tesseract-ocr + poppler-utils instalados — ver INSTALACION.md")
