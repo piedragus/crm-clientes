@@ -5910,6 +5910,30 @@ class TestImportBatchStaging(unittest.TestCase):
         self.batches.append(d["batch_id"])
         return d
 
+    def _commit_y_esperar(self, batch_id, timeout=5):
+        """issue #21: /commit ahora responde 202 de inmediato y procesa en
+        background. Pollea GET /api/import_batches/<id> hasta que termine
+        (estado != 'committing') y devuelve el batch final."""
+        r = self.client.post(f"/api/import_batches/{batch_id}/commit")
+        self.assertEqual(r.status_code, 202)
+        return self._esperar_fin(batch_id, timeout)
+
+    def _retry_y_esperar(self, batch_id, timeout=5):
+        r = self.client.post(f"/api/import_batches/{batch_id}/retry_errors")
+        if r.status_code == 200:
+            return r.get_json()["data"]  # caso "no hay items en error"
+        self.assertEqual(r.status_code, 202)
+        return self._esperar_fin(batch_id, timeout)
+
+    def _esperar_fin(self, batch_id, timeout=5):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            batch = self.db.obtener_import_batch(batch_id)
+            if batch["estado"] != "committing":
+                return batch
+            time.sleep(0.02)
+        self.fail(f"batch {batch_id} sigue en 'committing' después de {timeout}s")
+
     def test_scan_crea_batch_e_items_sin_tocar_cotizaciones(self):
         n_cot_antes = self.db.fetchone("SELECT COUNT(*) as n FROM cotizaciones")["n"]
         d = self._scan()
@@ -5927,9 +5951,7 @@ class TestImportBatchStaging(unittest.TestCase):
     def test_commit_importa_solo_items_validos(self):
         d = self._scan()
         self.creadas += ["ClienteStagingA", "ClienteStagingB"]
-        r = self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
-        self.assertEqual(r.status_code, 200)
-        batch = r.get_json()["data"]
+        batch = self._commit_y_esperar(d["batch_id"])
         self.assertEqual(batch["estado"], "completado")
         self.assertEqual(batch["creados"], 2)
         self.assertEqual(batch["errores"], 0)
@@ -5961,7 +5983,8 @@ class TestImportBatchStaging(unittest.TestCase):
         self.db.actualizar_import_item(item_a["id"], file_hash=hash_a, accion="crear")
 
         r = self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 202)
+        self._esperar_fin(d["batch_id"])
         item_final = self.db.obtener_import_item(item_a["id"])
         self.assertEqual(item_final["estado"], "omitido")
         self.assertIn("hash", (item_final["error"] or "").lower())
@@ -5985,7 +6008,7 @@ class TestImportBatchStaging(unittest.TestCase):
         self.assertEqual(item_corregido["accion"], "usar_existente")
         self.assertEqual(item_corregido["empresa_id"], destino["id"])
 
-        self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self._commit_y_esperar(d["batch_id"])
         # No debe haberse creado "ClienteStagingA" como empresa nueva
         a_creada = self.db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteStagingA'")
         self.assertIsNone(a_creada, "ClienteStagingA no debe crearse, se redirigió a EmpresaDestino")
@@ -6001,9 +6024,7 @@ class TestImportBatchStaging(unittest.TestCase):
         # Forzar un error real: usar_existente sin empresa_id
         self.db.actualizar_import_item(item_malo["id"], accion="usar_existente", empresa_id=None)
 
-        r = self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
-        self.assertEqual(r.status_code, 200)
-        batch = r.get_json()["data"]
+        batch = self._commit_y_esperar(d["batch_id"])
         self.assertEqual(batch["errores"], 1)
         self.assertEqual(batch["creados"], 1, "El otro item debe haberse importado igual")
 
@@ -6021,7 +6042,7 @@ class TestImportBatchStaging(unittest.TestCase):
         item_malo = items[0]
         self.db.actualizar_import_item(item_malo["id"], accion="usar_existente", empresa_id=None)
 
-        self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self._commit_y_esperar(d["batch_id"])
         self.assertEqual(self.db.obtener_import_item(item_malo["id"])["estado"], "error")
 
         # Corregir la causa real del error y reintentar
@@ -6029,9 +6050,7 @@ class TestImportBatchStaging(unittest.TestCase):
                                     json={"accion": "crear"})
         self.assertEqual(r_patch.status_code, 200)
 
-        r = self.client.post(f"/api/import_batches/{d['batch_id']}/retry_errors")
-        self.assertEqual(r.status_code, 200)
-        batch = r.get_json()["data"]
+        batch = self._retry_y_esperar(d["batch_id"])
         self.assertEqual(batch["errores"], 0)
         self.assertEqual(self.db.obtener_import_item(item_malo["id"])["estado"], "importado")
 
@@ -6045,9 +6064,27 @@ class TestImportBatchStaging(unittest.TestCase):
     def test_cancel_batch_completado_falla(self):
         d = self._scan()
         self.creadas += ["ClienteStagingA", "ClienteStagingB"]
-        self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self._commit_y_esperar(d["batch_id"])
         r = self.client.post(f"/api/import_batches/{d['batch_id']}/cancel")
         self.assertEqual(r.status_code, 400)
+
+    def test_cancel_batch_mientras_se_procesa_falla(self):
+        """issue #21: cancelar mientras el commit corre en background debe
+        rechazarse (no dejar una condición de carrera donde el thread
+        termine y pise 'cancelado' con 'completado')."""
+        d = self._scan()
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+        r_commit = self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self.assertEqual(r_commit.status_code, 202)
+        # Intento de cancelar apenas se lanzó (lo más probable es que el
+        # batch siga 'committing', dado que el trabajo es chico y rápido
+        # esto es algo frágil, así que solo verificamos SI sigue
+        # committing — si ya terminó, no hay nada que probar acá).
+        batch_actual = self.db.obtener_import_batch(d["batch_id"])
+        if batch_actual["estado"] == "committing":
+            r_cancel = self.client.post(f"/api/import_batches/{d['batch_id']}/cancel")
+            self.assertEqual(r_cancel.status_code, 400)
+        self._esperar_fin(d["batch_id"])
 
     def test_segundo_scan_sobre_misma_carpeta_omite_archivos_en_vuelo(self):
         """Peer review de PR #19: dos batches escaneando la misma carpeta

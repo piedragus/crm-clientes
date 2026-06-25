@@ -2462,36 +2462,58 @@ async function batchChangeEmpresa(itemId, nombre) {
 async function batchCommit() {
   if (!BATCH.id) return;
   if (!confirm("¿Confirmar e importar? Esto va a crear empresas y cotizaciones definitivas.")) return;
-
-  document.getElementById("batch-progress").style.display = "";
-  document.getElementById("batch-prog-label").textContent = "Importando…";
-  document.getElementById("batch-prog-bar").style.width = "50%";
   document.getElementById("btn-batch-commit").disabled = true;
-
   try {
     const r = await POST(`/api/import_batches/${BATCH.id}/commit`);
     if (!r.ok) { toast(r.error || "Error", "err"); return; }
-    document.getElementById("batch-prog-bar").style.width = "100%";
-    const b = r.data;
-    toast(`✓ ${b.creados} creadas, ${b.actualizados} actualizadas` +
-          (b.errores ? ` | ${b.errores} con error` : ""), b.errores ? "err" : "ok");
-    await Promise.all([loadEmpresas(), loadStats()]);
-    await batchRefreshInfo();
-    await batchLoadItems();
+    await batchPollearHastaTerminar();
   } finally {
     document.getElementById("btn-batch-commit").disabled = false;
-    setTimeout(() => document.getElementById("batch-progress").style.display = "none", 1200);
   }
 }
 
 async function batchRetryErrors() {
   if (!BATCH.id) return;
-  const r = await POST(`/api/import_batches/${BATCH.id}/retry_errors`);
-  if (!r.ok) { toast(r.error || "Error", "err"); return; }
-  toast(r.data.mensaje || "Reintento completado");
+  document.getElementById("btn-batch-retry").disabled = true;
+  try {
+    const r = await POST(`/api/import_batches/${BATCH.id}/retry_errors`);
+    if (!r.ok) { toast(r.error || "Error", "err"); return; }
+    if (r.data && r.data.mensaje) { toast(r.data.mensaje); return; }  // "no hay items en error"
+    await batchPollearHastaTerminar();
+  } finally {
+    document.getElementById("btn-batch-retry").disabled = false;
+  }
+}
+
+// issue #21: el commit/retry corren en background — el server responde
+// 202 de inmediato y hay que pollear GET /api/import_batches/<id> para
+// ver progreso real (creados+actualizados+errores contra total_items)
+// hasta que el estado deje de ser 'committing'.
+async function batchPollearHastaTerminar() {
+  document.getElementById("batch-progress").style.display = "";
+  document.getElementById("batch-prog-label").textContent = "Importando…";
+
+  while (true) {
+    const r = await GET(`/api/import_batches/${BATCH.id}`);
+    if (!r.ok) break;
+    const b = r.data;
+    const procesados = (b.creados||0) + (b.actualizados||0) + (b.errores||0) + (b.omitidos||0);
+    const pct = b.total_items ? Math.min(100, Math.round(procesados / b.total_items * 100)) : 0;
+    document.getElementById("batch-prog-bar").style.width = pct + "%";
+    document.getElementById("batch-prog-count").textContent =
+      `${procesados} / ${b.total_items}`;
+
+    if (b.estado !== "committing") {
+      toast(`✓ ${b.creados} creadas, ${b.actualizados} actualizadas` +
+            (b.errores ? ` | ${b.errores} con error` : ""), b.errores ? "err" : "ok");
+      break;
+    }
+    await new Promise(res => setTimeout(res, 800));
+  }
   await Promise.all([loadEmpresas(), loadStats()]);
   await batchRefreshInfo();
   await batchLoadItems();
+  setTimeout(() => document.getElementById("batch-progress").style.display = "none", 1200);
 }
 
 async function batchCancel() {

@@ -2093,13 +2093,21 @@ def import_item_patch(item_id):
 
 
 def _ejecutar_commit_batch(batch_id):
-    """Lógica real de commit, sin el guard de estado de la ruta pública —
-    la usan tanto /commit como /retry_errors (que necesita poder re-correr
-    el commit sobre un batch ya 'completado' con errores pendientes)."""
-    db.actualizar_import_batch(batch_id, estado="committing")
-    items = db.listar_import_items(batch_id, limit=100000)
+    """Lógica real de commit. Corre en un thread de background (issue #21):
+    el endpoint público solo marca 'committing' y dispara este thread,
+    no espera a que termine — así un batch de miles de archivos no
+    cuelga el request HTTP más allá del timeout del proxy/WSGI.
 
-    creados = actualizados = errores = 0
+    Actualiza los contadores del batch DESPUÉS DE CADA ITEM (no solo al
+    final), para que el polling del frontend (GET /api/import_batches/<id>)
+    muestre progreso real en vez de saltar de 0% a 100%.
+    """
+    items = db.listar_import_items(batch_id, limit=100000)
+    batch_prev = db.obtener_import_batch(batch_id)
+    creados_acum     = batch_prev["creados"] or 0
+    actualizados_acum = batch_prev["actualizados"] or 0
+    errores = 0
+
     for item in items:
         if item["estado"] in ("omitido", "importado"):
             continue
@@ -2123,11 +2131,11 @@ def _ejecutar_commit_batch(batch_id):
                         raise RuntimeError(f"No se pudo crear empresa {nombre!r}")
                     nueva = db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
                     empresa_id = nueva["id"] if nueva else None
-                    creados += 1
+                    creados_acum += 1
             elif item["accion"] == "usar_existente":
                 if not empresa_id:
                     raise RuntimeError("accion='usar_existente' sin empresa_id asignado")
-                actualizados += 1
+                actualizados_acum += 1
             else:
                 continue  # 'omitir' ya filtrado arriba, no debería llegar acá
 
@@ -2147,18 +2155,14 @@ def _ejecutar_commit_batch(batch_id):
             errores += 1
             db.actualizar_import_item(item["id"], estado="error", error=str(e))
 
-    # Acumula sobre los contadores previos (relevante para retry_errors,
-    # que vuelve a llamar esto sobre un batch que ya tenía creados/actualizados
-    # de una corrida anterior).
-    batch_prev = db.obtener_import_batch(batch_id)
+        # Progreso incremental — el frontend hace polling de esto durante
+        # el procesamiento, no solo al terminar.
+        db.actualizar_import_batch(batch_id, creados=creados_acum,
+                                   actualizados=actualizados_acum, errores=errores)
+
     db.actualizar_import_batch(
         batch_id, estado="completado",
-        creados=(batch_prev["creados"] or 0) + creados,
-        actualizados=(batch_prev["actualizados"] or 0) + actualizados,
-        errores=errores,  # errores es un conteo actual, no acumulado: si se
-                          # corrigieron, no deben seguir contando como error
         fecha_commit=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    return db.obtener_import_batch(batch_id)
 
 
 @app.route("/api/import_batches/<int:batch_id>/commit", methods=["POST"])
@@ -2169,20 +2173,29 @@ def import_batch_commit(batch_id):
     inserta la cotización. Un error en un item no frena el resto —
     el item queda en estado 'error' con el mensaje, y se puede reintentar
     con /retry_errors sin tocar los que ya se importaron bien.
+
+    Procesa en background (issue #21): responde 202 de inmediato con el
+    batch en estado 'committing'. El cliente debe hacer polling sobre
+    GET /api/import_batches/<id> para ver el progreso y el resultado final.
     """
     batch = db.obtener_import_batch(batch_id)
     if not batch: return err("Batch no encontrado", 404)
     if batch["estado"] in ("completado", "committing"):
         return err(f"El batch ya está en estado {batch['estado']!r}")
-    return ok(_ejecutar_commit_batch(batch_id))
+    db.actualizar_import_batch(batch_id, estado="committing")
+    threading.Thread(target=_ejecutar_commit_batch, args=(batch_id,), daemon=True).start()
+    return ok(db.obtener_import_batch(batch_id)), 202
 
 
 @app.route("/api/import_batches/<int:batch_id>/retry_errors", methods=["POST"])
 def import_batch_retry_errors(batch_id):
     """Reintenta solo los items en estado 'error' del batch, sin tocar
-    los que ya están 'importado' u 'omitido'."""
+    los que ya están 'importado' u 'omitido'. También procesa en
+    background, igual que /commit (issue #21)."""
     batch = db.obtener_import_batch(batch_id)
     if not batch: return err("Batch no encontrado", 404)
+    if batch["estado"] == "committing":
+        return err("El batch ya está procesándose")
 
     errores_items = db.listar_import_items(batch_id, estado="error", limit=100000)
     if not errores_items:
@@ -2191,7 +2204,9 @@ def import_batch_retry_errors(batch_id):
     for item in errores_items:
         db.actualizar_import_item(item["id"], estado="pendiente", error=None)
 
-    return ok(_ejecutar_commit_batch(batch_id))
+    db.actualizar_import_batch(batch_id, estado="committing")
+    threading.Thread(target=_ejecutar_commit_batch, args=(batch_id,), daemon=True).start()
+    return ok(db.obtener_import_batch(batch_id)), 202
 
 
 @app.route("/api/import_batches/<int:batch_id>/cancel", methods=["POST"])
@@ -2200,6 +2215,11 @@ def import_batch_cancel(batch_id):
     if not batch: return err("Batch no encontrado", 404)
     if batch["estado"] == "completado":
         return err("No se puede cancelar un batch ya completado")
+    if batch["estado"] == "committing":
+        # El commit corre en background (issue #21) — cancelar acá dejaría
+        # una condición de carrera: el thread de background terminaría
+        # igual y pisaría 'cancelado' con 'completado' segundos después.
+        return err("El batch se está procesando, esperá a que termine antes de cancelar")
     if not db.actualizar_import_batch(batch_id, estado="cancelado"):
         return err("No se pudo cancelar")
     return ok(db.obtener_import_batch(batch_id))
