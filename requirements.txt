@@ -10,3 +10,5 @@ google-genai
 openai
 anthropic
 chardet
+pytesseract
+pdf2image
