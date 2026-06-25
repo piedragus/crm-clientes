@@ -5803,6 +5803,70 @@ class TestImportadorJerarquiasAnidadas(unittest.TestCase):
 # =====================================================================
 # Sprint D — staging de importación (import_batches / import_items)
 # =====================================================================
+class TestExtensionesImportadoresUnificadas(unittest.TestCase):
+    """
+    Surgido del peer review de PR #31 (issue #18): en vez de un test
+    hardcodeado a un solo archivo .pdf (que no avisaría si alguien rompe
+    el soporte de otra extensión), recorre la lista real IMPORT_EXTS del
+    código y manda un archivo dummy por cada una contra los 2 endpoints
+    que se unificaron en ese PR — así una regresión futura en cualquier
+    extensión (no solo .pdf) hace fallar este test.
+    """
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db, IMPORT_EXTS as _exts
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db = _db
+        self.exts = _exts
+        self.tmpdir = tempfile.mkdtemp()
+        self.creadas = []
+        self.batches = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in self.creadas:
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+        for bid in self.batches:
+            with self.db._get_connection() as conn:
+                conn.execute("DELETE FROM import_batches WHERE id=?", (bid,))
+                conn.commit()
+
+    def test_importar_masivo_acepta_todas_las_extensiones_de_import_exts(self):
+        for i, ext in enumerate(sorted(self.exts)):
+            nombre_empresa = f"ClienteExt{i}"
+            sub = os.path.join(self.tmpdir, nombre_empresa)
+            os.makedirs(sub)
+            with open(os.path.join(sub, f"cot{ext}"), "w") as f:
+                f.write("contenido dummy")
+            self.creadas.append(nombre_empresa)
+
+        r = self.client.post("/api/importar/masivo", json={"path": self.tmpdir})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.assertEqual(d["empresas_creadas"], len(self.exts),
+            f"esperaba que las {len(self.exts)} extensiones de IMPORT_EXTS "
+            f"se procesaran ({sorted(self.exts)}), solo se crearon {d['empresas_creadas']} empresas")
+
+    def test_importar_subcarpetas_acepta_todas_las_extensiones_de_import_exts(self):
+        sub = os.path.join(self.tmpdir, "ClienteExtSub")
+        os.makedirs(sub)
+        for i, ext in enumerate(sorted(self.exts)):
+            with open(os.path.join(sub, f"archivo{i}{ext}"), "w") as f:
+                f.write("contenido dummy")
+
+        r = self.client.post("/api/import_batches/scan", json={"path": self.tmpdir})
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()["data"]
+        self.batches.append(d["batch_id"])
+        self.creadas.append("ClienteExtSub")
+        self.assertEqual(d["total_items"], len(self.exts),
+            f"esperaba {len(self.exts)} items (uno por extensión de IMPORT_EXTS), "
+            f"se detectaron {d['total_items']}")
+
+
 class TestImportBatchStaging(unittest.TestCase):
     """Tests mínimos pedidos en el issue de Sprint D:
     - Scan crea batch e items sin tocar cotizaciones definitivas.
