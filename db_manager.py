@@ -423,8 +423,18 @@ class DBManager:
                     conn.execute(query, params)
                     conn.commit()
                 return True
+            except sqlite3.IntegrityError as e:
+                # FK/UNIQUE/CHECK — la categoría de error más opaca de
+                # diagnosticar sin ver la query+params (issue #20: este
+                # tipo de fallo ya costó tiempo real de debugging una vez
+                # por no tener este detalle en el log).
+                logging.error(
+                    f"Violación de integridad ejecutando query: {query!r} "
+                    f"params={params!r} — {e}")
+                return False
             except Exception as e:
-                logging.error(f"Error al ejecutar la consulta: {e}")
+                logging.error(f"Error al ejecutar la consulta: {query!r} "
+                              f"params={params!r} — {e}")
                 return False
 
     def fetchall(self, query: str, params: tuple = ()) -> List[Dict]:
@@ -844,8 +854,13 @@ class DBManager:
                 conn.execute("DELETE FROM empresas WHERE id = ?",(id_origen,))
                 conn.commit()
             return True
+        except sqlite3.IntegrityError as e:
+            logging.error(f"Violación de integridad al unificar empresas "
+                          f"(origen={id_origen}, destino={id_destino}): {e}")
+            return False
         except Exception as e:
-            logging.error(f"Error al unificar empresas: {e}")
+            logging.error(f"Error al unificar empresas "
+                          f"(origen={id_origen}, destino={id_destino}): {e}")
             return False
 
     def obtener_empresa_por_id(self, empresa_id):
@@ -883,8 +898,11 @@ class DBManager:
                     self.vincular_empresa_con_tags(empresa_id, [t.strip() for t in tags.split(',') if t.strip()])
                 return True
             return False
+        except sqlite3.IntegrityError as e:
+            logging.error(f"Violación de integridad al agregar empresa {nombre!r}: {e}")
+            return False
         except Exception as e:
-            logging.error(f"Error al agregar empresa: {e}")
+            logging.error(f"Error al agregar empresa {nombre!r}: {e}")
             return False
 
     def editar_empresa(self, empresa_id, nombre, direccion, telefono,
@@ -914,8 +932,11 @@ class DBManager:
                     if str(viejo) != str(nuevo):
                         self.registrar_cambio(empresa_id, campo, viejo, nuevo, fuente)
             return True
+        except sqlite3.IntegrityError as e:
+            logging.error(f"Violación de integridad al editar empresa {empresa_id}: {e}")
+            return False
         except Exception as e:
-            logging.error(f"Error al editar empresa: {e}")
+            logging.error(f"Error al editar empresa {empresa_id}: {e}")
             return False
 
 

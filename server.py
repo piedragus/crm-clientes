@@ -865,8 +865,6 @@ def escanear_carpeta():
     calc_hash  = bool(b.get("hash", False))  # OFF by default
     thresh     = max(0, min(to_int(b.get("thresh", 60), 60), 100))
 
-    EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
-
     try:
         from rapidfuzz import process as fz_process
     except ImportError:
@@ -900,7 +898,7 @@ def escanear_carpeta():
     all_paths  = []   # (fpath, fname, folder_chain)
     total_approx = 0
 
-    for fpath, fname, folder_chain in walk_files(path, EXTS):
+    for fpath, fname, folder_chain in walk_files(path, IMPORT_EXTS):
         if fpath in existing_rutas:
             continue
         total_approx += 1
@@ -973,8 +971,6 @@ def importar_empresas_desde_carpeta():
     if not path or not os.path.isdir(path):
         return err(f"Carpeta no encontrada: {path!r}")
 
-    EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
-
     # Load existing empresas
     emp_by_nombre = {e["nombre"].lower(): e["id"]
                      for e in db.fetchall("SELECT id, nombre FROM empresas")}
@@ -984,7 +980,7 @@ def importar_empresas_desde_carpeta():
     existentes = 0
     errores    = 0
 
-    for fpath, fname, folder_chain in walk_files(path, EXTS):
+    for fpath, fname, folder_chain in walk_files(path, IMPORT_EXTS):
         stem   = os.path.splitext(fname)[0]
         nombre = _get_client_name(folder_chain, stem)
         if not nombre or len(nombre.strip()) < 2:
@@ -1327,7 +1323,6 @@ def listar_subcarpetas():
                 db.fetchall("SELECT ruta_archivo FROM cotizaciones")
                 if r.get("ruta_archivo")}
 
-    EXTS = {".pdf",".docx",".xlsx",".doc",".xls",".pptx",".txt"}
     result = []
 
     try:
@@ -1341,7 +1336,7 @@ def listar_subcarpetas():
         total = ya = 0
         for root, _, files in os.walk(entry.path):
             for fname in files:
-                if os.path.splitext(fname)[1].lower() in EXTS:
+                if os.path.splitext(fname)[1].lower() in IMPORT_EXTS:
                     total += 1
                     if os.path.join(root, fname) in existing:
                         ya += 1
@@ -1358,7 +1353,7 @@ def listar_subcarpetas():
     loose_total = loose_ya = 0
     for fname in os.listdir(path):
         fpath = os.path.join(path, fname)
-        if os.path.isfile(fpath) and                 os.path.splitext(fname)[1].lower() in EXTS:
+        if os.path.isfile(fpath) and os.path.splitext(fname)[1].lower() in IMPORT_EXTS:
             loose_total += 1
             if fpath in existing:
                 loose_ya += 1
@@ -1399,8 +1394,6 @@ def importar_subcarpetas():
     if not subcarpetas:
         return err("Seleccioná al menos una subcarpeta")
 
-    EXTS = {".pdf"}  # Solo PDF en importador por subcarpetas
-
     existing_rutas = {r["ruta_archivo"] for r in
                       db.fetchall("SELECT ruta_archivo FROM cotizaciones")
                       if r.get("ruta_archivo")}
@@ -1421,7 +1414,7 @@ def importar_subcarpetas():
         if not os.path.isdir(sub_path):
             continue
         for fpath, fname, folder_chain in walk_files(
-                sub_path, EXTS, relative_to=path, sort_files=True):
+                sub_path, IMPORT_EXTS, relative_to=path, sort_files=True):
             if fpath in existing_rutas:
                 continue
             all_files.append((fpath, fname, folder_chain))
@@ -1597,7 +1590,7 @@ def importar_masivo():
     }
 
     # Walk the folder tree
-    for fpath, fname, folder_chain in walk_files(path, {'.pdf'}):
+    for fpath, fname, folder_chain in walk_files(path, IMPORT_EXTS):
         if fpath in existing:
             stats["ya_existian"] += 1
             continue
@@ -1721,7 +1714,7 @@ def importar_masivo_preview():
     ya_importados = 0
     sample = []
 
-    for fpath, fname, folder_chain in walk_files(path, {'.pdf'}):
+    for fpath, fname, folder_chain in walk_files(path, IMPORT_EXTS):
         total_pdf += 1
         if fpath in existing:
             ya_importados += 1
@@ -1915,7 +1908,6 @@ def patch_extraccion_campo(cid, campo):
 
 
 # ── Sprint D: staging de importación (preview/corrección/commit) ─────────────
-IMPORT_BATCH_EXTS = {".pdf", ".docx", ".xlsx", ".doc", ".xls", ".pptx", ".txt"}
 ESTADOS_BATCH_VALIDOS = {"preview", "corrigiendo", "committing", "completado", "error", "cancelado"}
 ESTADOS_ITEM_VALIDOS  = {"pendiente", "match_auto", "requiere_revision", "omitido", "importado", "error"}
 ACCIONES_ITEM_VALIDAS = {"crear", "usar_existente", "omitir"}
@@ -1982,7 +1974,7 @@ def import_batch_scan():
     counts = {"requiere_revision": 0, "match_auto": 0, "omitido": 0}
     total = 0
 
-    for fpath, fname, folder_chain in walk_files(path, IMPORT_BATCH_EXTS):
+    for fpath, fname, folder_chain in walk_files(path, IMPORT_EXTS):
         total += 1
         stem = os.path.splitext(fname)[0]
         empresa_nombre = _get_client_name(folder_chain, stem)
