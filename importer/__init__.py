@@ -19,6 +19,7 @@ from .resolver import (
     extract_client_from_stem,
     get_client_name,
 )
+from .single_file import importar_archivo, file_sha256
 
 __all__ = [
     "GENERIC_FOLDERS",
@@ -28,4 +29,6 @@ __all__ = [
     "detect_pais",
     "extract_client_from_stem",
     "get_client_name",
+    "importar_archivo",
+    "file_sha256",
 ]

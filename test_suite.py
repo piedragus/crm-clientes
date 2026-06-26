@@ -6397,6 +6397,96 @@ class TestOcrFallback(unittest.TestCase):
             _db.eliminar_empresa(emp["id"])
 
 
+
+
+# =====================================================================
+# Sprint F — importer.importar_archivo (entry point de archivo único,
+# que necesita el watcher de OneDrive)
+# =====================================================================
+class TestImportarArchivoUnico(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import db as _db
+        from importer import importar_archivo
+        self.db = _db
+        self.importar_archivo = importar_archivo
+        self.tmpdir = tempfile.mkdtemp()
+        self.creadas = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in self.creadas:
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+
+    def _crear_archivo(self, *partes_carpeta, nombre="cot.pdf", contenido="%PDF-1.4"):
+        carpeta = os.path.join(self.tmpdir, *partes_carpeta)
+        os.makedirs(carpeta, exist_ok=True)
+        path = os.path.join(carpeta, nombre)
+        with open(path, "w") as f:
+            f.write(contenido)
+        return path
+
+    def test_importa_archivo_nuevo_crea_empresa_y_cotizacion(self):
+        path = self._crear_archivo("Argentina", "ClienteWatcherUno")
+        self.creadas.append("ClienteWatcherUno")
+        r = self.importar_archivo(self.db, path, self.tmpdir)
+        self.assertEqual(r["estado"], "importado")
+        self.assertEqual(r["empresa_nombre"], "ClienteWatcherUno")
+        emp = self.db.fetchone("SELECT pais FROM empresas WHERE nombre='ClienteWatcherUno'")
+        self.assertEqual(emp["pais"], "Argentina")
+        cot = self.db.fetchone(
+            "SELECT id FROM cotizaciones WHERE ruta_archivo=?", (path,))
+        self.assertIsNotNone(cot)
+
+    def test_mismo_archivo_dos_veces_se_omite_por_ruta(self):
+        path = self._crear_archivo("ClienteWatcherDos")
+        self.creadas.append("ClienteWatcherDos")
+        self.importar_archivo(self.db, path, self.tmpdir)
+        r2 = self.importar_archivo(self.db, path, self.tmpdir)
+        self.assertEqual(r2["estado"], "omitido")
+        self.assertIn("ruta", r2["motivo"])
+
+    def test_mismo_contenido_otra_ruta_se_omite_por_hash(self):
+        path1 = self._crear_archivo("ClienteWatcherTres", nombre="a.pdf",
+                                    contenido="contenido idéntico")
+        path2 = self._crear_archivo("ClienteWatcherTres", nombre="b.pdf",
+                                    contenido="contenido idéntico")
+        self.creadas.append("ClienteWatcherTres")
+        self.importar_archivo(self.db, path1, self.tmpdir)
+        r2 = self.importar_archivo(self.db, path2, self.tmpdir)
+        self.assertEqual(r2["estado"], "omitido")
+        self.assertIn("hash", r2["motivo"])
+
+    def test_extension_no_soportada_se_omite_sin_crashear(self):
+        path = self._crear_archivo("ClienteWatcherCuatro", nombre="imagen.jpg")
+        r = self.importar_archivo(self.db, path, self.tmpdir)
+        self.assertEqual(r["estado"], "omitido")
+        emp = self.db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteWatcherCuatro'")
+        self.assertIsNone(emp, "no debe crear empresa para un archivo que ni se procesa")
+
+    def test_archivo_inexistente_no_crashea(self):
+        r = self.importar_archivo(self.db, "/ruta/que/no/existe.pdf", self.tmpdir)
+        self.assertEqual(r["estado"], "error")
+        self.assertIsNotNone(r["motivo"])
+
+    def test_empresa_ya_existente_no_se_duplica(self):
+        self.db.agregar_empresa("ClienteWatcherCinco", "", "", "", "", "Brasil", "")
+        self.creadas.append("ClienteWatcherCinco")
+        emp_antes = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='ClienteWatcherCinco'")
+
+        path = self._crear_archivo("ClienteWatcherCinco")
+        r = self.importar_archivo(self.db, path, self.tmpdir)
+        self.assertEqual(r["estado"], "importado")
+        self.assertEqual(r["empresa_id"], emp_antes["id"],
+            "debe reusar la empresa existente, no crear una segunda")
+        total = self.db.fetchall(
+            "SELECT id FROM empresas WHERE nombre='ClienteWatcherCinco'")
+        self.assertEqual(len(total), 1)
+
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = loader.loadTestsFromModule(__import__(__name__))
