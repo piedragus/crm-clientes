@@ -94,8 +94,8 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
 #list-table tr{cursor:pointer;contain:layout style}
 #list-table tr:hover td{background:#EFF6FF}
 #list-table tr.selected td{background:#DBEAFE}
-#list-table tr.multi-selected td{background:#FEF08A}
-#list-table tr.multi-selected.selected td{background:#DBEAFE}
+#list-table tr.multi-selected td{background:#FEF08A !important}
+#list-table tr.multi-selected.selected td{background:#DBEAFE !important}
 #list-table tr.row-g td{background:var(--row-g)}
 #list-table tr.row-a td{background:var(--row-a)}
 #list-table tr.row-r td{background:var(--row-r)}
@@ -1343,9 +1343,11 @@ function statCardClick(type) {
   if (type === "empresas") {
     clearFilters();
     document.getElementById("search").value = "";
+    toast("Mostrando todas las empresas (filtros limpiados)");
   } else if (type === "contactos") {
     document.getElementById("fl-con").value = "con";
     applyFilters();
+    toast("Filtrando: solo empresas con contactos");
   } else if (type === "cotizaciones") {
     showSearch();
   } else if (type === "activas") {
@@ -1354,6 +1356,7 @@ function statCardClick(type) {
     panel.classList.remove("flash-highlight");
     // restart animation even if clicked twice in a row
     requestAnimationFrame(() => panel.classList.add("flash-highlight"));
+    toast("Actividad reciente (últimos 30 días) resaltada en el panel lateral");
   }
 }
 
