@@ -359,6 +359,10 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     <input id="search" placeholder="Nombre o país…" oninput="onSearch()">
     <button class="btn btn-dark" id="btn-filters" onclick="showFilters()">Filtros</button>
     <span id="filter-badge"></span>
+    <button class="btn btn-ghost" id="btn-clear-filters" onclick="clearFilters()"
+            style="display:none;padding:4px 8px;font-size:11px" title="Limpiar todos los filtros">
+      ✕ Limpiar filtros
+    </button>
     <div id="topbar-right">
       <button class="btn btn-dark" onclick="showSearch()">Buscar cotizaciones</button>
       <!-- Tools dropdown -->
@@ -2942,6 +2946,7 @@ function applyFilters() {
   S.filters = f;
   const n = Object.keys(f).length;
   document.getElementById("filter-badge").textContent = n ? `● ${n}` : "";
+  document.getElementById("btn-clear-filters").style.display = n ? "" : "none";
   closeModal("filters-modal");
   loadEmpresas();
 }
@@ -2952,6 +2957,7 @@ function clearFilters() {
   document.getElementById("fl-dias").value = "0";
   S.filters = {};
   document.getElementById("filter-badge").textContent = "";
+  document.getElementById("btn-clear-filters").style.display = "none";
   closeModal("filters-modal");
   loadEmpresas();
 }
