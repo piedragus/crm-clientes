@@ -5934,6 +5934,23 @@ class TestImportBatchStaging(unittest.TestCase):
             time.sleep(0.02)
         self.fail(f"batch {batch_id} sigue en 'committing' después de {timeout}s")
 
+    def _esperar_fin_via_http(self, batch_id, timeout=5):
+        """Igual que _esperar_fin pero pollea vía el endpoint HTTP real
+        (GET /api/import_batches/<id>), no la DB directo — cierra el punto
+        ciego señalado en el peer review de PR #32: pollear la DB confirma
+        que el thread de background hace su trabajo, pero no que la API
+        pública esté serializando los contadores correctamente para que
+        el frontend (que SÍ pollea vía HTTP) los pueda leer."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            r = self.client.get(f"/api/import_batches/{batch_id}")
+            self.assertEqual(r.status_code, 200)
+            batch = r.get_json()["data"]
+            if batch["estado"] != "committing":
+                return batch
+            time.sleep(0.02)
+        self.fail(f"batch {batch_id} sigue en 'committing' después de {timeout}s (vía HTTP)")
+
     def test_scan_crea_batch_e_items_sin_tocar_cotizaciones(self):
         n_cot_antes = self.db.fetchone("SELECT COUNT(*) as n FROM cotizaciones")["n"]
         d = self._scan()
@@ -6053,6 +6070,25 @@ class TestImportBatchStaging(unittest.TestCase):
         batch = self._retry_y_esperar(d["batch_id"])
         self.assertEqual(batch["errores"], 0)
         self.assertEqual(self.db.obtener_import_item(item_malo["id"])["estado"], "importado")
+
+    def test_polling_via_http_refleja_contadores_correctamente(self):
+        """Peer review PR #32, punto 3: simula exactamente lo que hace
+        batchCommit() en el frontend (POST /commit, después GET repetido
+        hasta que estado != 'committing'), en vez de pollear la DB
+        directo — confirma que la API pública serializa los contadores
+        bien, no solo que el thread de background escribe en la DB."""
+        d = self._scan()
+        self.creadas += ["ClienteStagingA", "ClienteStagingB"]
+
+        r = self.client.post(f"/api/import_batches/{d['batch_id']}/commit")
+        self.assertEqual(r.status_code, 202)
+        batch = self._esperar_fin_via_http(d["batch_id"])
+
+        self.assertEqual(batch["estado"], "completado")
+        self.assertEqual(batch["creados"], 2)
+        self.assertEqual(batch["errores"], 0)
+        self.assertIn("conteo_por_estado", batch)
+        self.assertEqual(batch["conteo_por_estado"].get("importado"), 2)
 
     def test_cancel_batch_no_completado(self):
         d = self._scan()
