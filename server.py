@@ -1868,6 +1868,21 @@ def get_estado_ia(cid):
         "moneda":       row.get("moneda",""),
     })
 
+# ── Sprint F: notificaciones del watcher de OneDrive ──────────────────────────
+@app.route("/api/watcher/eventos")
+def get_watcher_eventos():
+    """El watcher corre como proceso separado (consola, sin Flask) y
+    escribe directo a la misma DB. El frontend pollea esto cada tanto
+    para mostrar un badge/toast de 'N archivos nuevos importados'."""
+    return ok(db.listar_eventos_watcher_no_vistos())
+
+@app.route("/api/watcher/eventos/marcar_vistos", methods=["POST"])
+def post_watcher_marcar_vistos():
+    if not db.marcar_eventos_watcher_vistos():
+        return err("No se pudo marcar como vistos")
+    return ok()
+
+
 # ── Sprint E: trazabilidad de extracción por campo ────────────────────────────
 @app.route("/api/cotizaciones/<int:cid>/extraccion")
 def get_extraccion_campos(cid):

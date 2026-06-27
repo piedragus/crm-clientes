@@ -6487,6 +6487,151 @@ class TestImportarArchivoUnico(unittest.TestCase):
         self.assertEqual(len(total), 1)
 
 
+
+
+# =====================================================================
+# Sprint F — watcher de OneDrive
+# =====================================================================
+class TestWatcherConfig(unittest.TestCase):
+    """Tests de watcher_config.py — exclusiones de carpeta, sin
+    depender de watchdog ni de un Observer real."""
+
+    def test_carpeta_excluida_match_exacto(self):
+        from watcher.watcher_config import carpeta_excluida
+        self.assertTrue(carpeta_excluida("MANUAL"))
+        self.assertTrue(carpeta_excluida("manual maquina"))
+        self.assertTrue(carpeta_excluida("Estructura"))
+
+    def test_carpeta_excluida_por_prefijo_fotos(self):
+        from watcher.watcher_config import carpeta_excluida
+        self.assertTrue(carpeta_excluida("FOTOS"))
+        self.assertTrue(carpeta_excluida("Fotos Cliente"))
+        self.assertTrue(carpeta_excluida("fotos 2024"))
+
+    def test_carpeta_normal_no_excluida(self):
+        from watcher.watcher_config import carpeta_excluida
+        self.assertFalse(carpeta_excluida("Argentina"))
+        self.assertFalse(carpeta_excluida("ClienteCualquiera"))
+
+    def test_ruta_excluida_si_alguna_carpeta_en_el_camino_lo_esta(self):
+        from watcher.watcher_config import ruta_excluida
+        root = "/onedrive"
+        self.assertTrue(ruta_excluida("/onedrive/Argentina/FOTOS/img.jpg", root))
+        self.assertTrue(ruta_excluida("/onedrive/MANUAL/manual.pdf", root))
+        self.assertFalse(ruta_excluida("/onedrive/Argentina/Cliente/cot.pdf", root))
+
+
+class TestWatcherHandler(unittest.TestCase):
+    """Tests del handler de eventos con un Observer real de watchdog,
+    sobre una carpeta temporal — esto SÍ ejercita filesystem real
+    (create/move), no solo mocks, para confirmar que watchdog entrega
+    los eventos como se espera en este sistema operativo."""
+
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import db as _db
+        self.db = _db
+        self.tmpdir = tempfile.mkdtemp()
+        self.creadas = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in self.creadas:
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+        with self.db._get_connection() as conn:
+            conn.execute("DELETE FROM watcher_eventos")
+            conn.commit()
+
+    def _correr_observer(self, accion, timeout=3, debounce=0.3):
+        """Levanta un Observer real sobre self.tmpdir, ejecuta `accion`
+        (que crea/mueve un archivo), espera a que el handler procese
+        (con un debounce corto para que el test no tarde de verdad los
+        5s de producción), y lo apaga.
+
+        watcher_handler.py hace 'from .watcher_config import
+        DEBOUNCE_SECONDS' — un import de nombre, no una referencia viva
+        al módulo. Por eso para parchear el valor hace falta parchear
+        el módulo de config y recargar watcher_handler DESPUÉS, en ese
+        orden, para que vuelva a leer el valor ya parcheado."""
+        from watchdog.observers import Observer
+        import importlib
+        import watcher.watcher_config as cfg
+        import watcher.watcher_handler as wh
+
+        debounce_original = cfg.DEBOUNCE_SECONDS
+        cfg.DEBOUNCE_SECONDS = debounce
+        importlib.reload(wh)
+        resultados = []
+        try:
+            handler = wh.CotizacionHandler(self.db, self.tmpdir,
+                                           on_resultado=resultados.append)
+            observer = Observer()
+            observer.schedule(handler, self.tmpdir, recursive=True)
+            observer.start()
+            try:
+                accion()
+                deadline = time.time() + timeout
+                while time.time() < deadline and not resultados:
+                    time.sleep(0.05)
+            finally:
+                observer.stop()
+                observer.join(timeout=2)
+        finally:
+            cfg.DEBOUNCE_SECONDS = debounce_original
+            importlib.reload(wh)
+        return resultados
+
+    def test_archivo_nuevo_se_importa_automaticamente(self):
+        carpeta = os.path.join(self.tmpdir, "Uruguay", "ClienteWatcherE2E")
+        os.makedirs(carpeta)
+        self.creadas.append("ClienteWatcherE2E")
+
+        def crear():
+            with open(os.path.join(carpeta, "cot.pdf"), "w") as f:
+                f.write("%PDF-1.4 contenido único test e2e watcher")
+
+        resultados = self._correr_observer(crear)
+        self.assertEqual(len(resultados), 1)
+        self.assertEqual(resultados[0]["estado"], "importado")
+        emp = self.db.fetchone(
+            "SELECT pais FROM empresas WHERE nombre='ClienteWatcherE2E'")
+        self.assertEqual(emp["pais"], "Uruguay")
+
+    def test_archivo_en_carpeta_excluida_no_se_importa(self):
+        carpeta = os.path.join(self.tmpdir, "Argentina", "FOTOS")
+        os.makedirs(carpeta)
+
+        def crear():
+            with open(os.path.join(carpeta, "foto.jpg"), "w") as f:
+                f.write("no es una cotizacion")
+
+        resultados = self._correr_observer(crear, timeout=1.5)
+        self.assertEqual(len(resultados), 0,
+            "un archivo en carpeta excluida no debe disparar ningún resultado")
+
+    def test_evento_queda_registrado_en_watcher_eventos(self):
+        carpeta = os.path.join(self.tmpdir, "ClienteWatcherEventos")
+        os.makedirs(carpeta)
+        self.creadas.append("ClienteWatcherEventos")
+
+        def crear():
+            with open(os.path.join(carpeta, "cot.pdf"), "w") as f:
+                f.write("%PDF-1.4 evento de watcher unico")
+
+        self._correr_observer(crear)
+        eventos = self.db.listar_eventos_watcher_no_vistos()
+        self.assertTrue(any(e["empresa_nombre"] == "ClienteWatcherEventos"
+                            for e in eventos))
+
+    def test_marcar_eventos_vistos_los_limpia(self):
+        self.db.registrar_evento_watcher("/fake/path.pdf", "importado", "FakeCo")
+        self.assertGreater(self.db.contar_eventos_watcher_no_vistos(), 0)
+        self.assertTrue(self.db.marcar_eventos_watcher_vistos())
+        self.assertEqual(self.db.contar_eventos_watcher_no_vistos(), 0)
+
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = loader.loadTestsFromModule(__import__(__name__))
