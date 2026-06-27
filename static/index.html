@@ -2528,6 +2528,12 @@ async function batchPollearHastaTerminar() {
     document.getElementById("batch-prog-bar").style.width = pct + "%";
     document.getElementById("batch-prog-count").textContent =
       `${procesados} / ${b.total_items}`;
+    // issue #33: si hay otro commit corriendo, este batch queda en
+    // 'committing' con 0 procesados mientras espera el lock — sin esto,
+    // se ve igual que "trabado" en vez de "esperando su turno".
+    document.getElementById("batch-prog-label").textContent =
+      procesados === 0 ? "Importando… (puede esperar si hay otra importación en curso)"
+                       : "Importando…";
 
     if (b.estado !== "committing") {
       toast(`✓ ${b.creados} creadas, ${b.actualizados} actualizadas` +
