@@ -6140,6 +6140,78 @@ class TestImportBatchStaging(unittest.TestCase):
             self.assertEqual(item["estado"], "omitido")
             self.assertIn(f"batch #{d1['batch_id']}", item["error"])
 
+    def test_dos_commits_concurrentes_se_serializan_sin_intercalarse(self):
+        """issue #33: dos batches comitteándose casi al mismo tiempo no
+        deben procesar sus items intercalados — _batch_commit_lock debe
+        garantizar que uno termina completo antes de que el otro arranque
+        a escribir, para no competir por la conexión SQLite.
+
+        Instrumentación: se parchea agregar_cotizacion_con_ruta para
+        registrar (archivo, instante) en una lista compartida con un
+        sleep chico adentro (ensancha la ventana en la que un bug de
+        no-serialización se notaría). Después se verifica que todos los
+        accesos de un batch están agrupados consecutivos, no mezclados
+        con los del otro."""
+        import threading as _threading
+
+        otro_dir = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(otro_dir, "ClienteLockB1"))
+            with open(os.path.join(otro_dir, "ClienteLockB1", "c.pdf"), "w") as f:
+                f.write("%PDF-1.4 lock test B1")
+            os.makedirs(os.path.join(self.tmpdir, "ClienteLockA1"))
+            with open(os.path.join(self.tmpdir, "ClienteLockA1", "c.pdf"), "w") as f:
+                f.write("%PDF-1.4 lock test A1")
+
+            d_a = self._scan(self.tmpdir)
+            d_b = self._scan(otro_dir)
+            self.creadas += ["ClienteStagingA", "ClienteStagingB",
+                             "ClienteLockA1", "ClienteLockB1"]
+
+            orden = []
+            orden_lock = _threading.Lock()
+            original = self.db.agregar_cotizacion_con_ruta
+
+            def instrumentado(*args, **kwargs):
+                # firma: (empresa_id, descripcion, monto, fecha, ruta, ...)
+                ruta = args[4] if len(args) > 4 else kwargs.get("ruta", "")
+                etiqueta = "B" if otro_dir in (ruta or "") else "A"
+                with orden_lock:
+                    orden.append(("inicio", etiqueta))
+                time.sleep(0.03)  # ensancha la ventana de detección de overlap
+                resultado = original(*args, **kwargs)
+                with orden_lock:
+                    orden.append(("fin", etiqueta))
+                return resultado
+
+            with patch.object(self.db, "agregar_cotizacion_con_ruta",
+                              side_effect=instrumentado):
+                t1 = _threading.Thread(
+                    target=lambda: self.client.post(f"/api/import_batches/{d_a['batch_id']}/commit"))
+                t2 = _threading.Thread(
+                    target=lambda: self.client.post(f"/api/import_batches/{d_b['batch_id']}/commit"))
+                t1.start(); t2.start()
+                t1.join(); t2.join()
+
+                self._esperar_fin(d_a["batch_id"])
+                self._esperar_fin(d_b["batch_id"])
+
+            # Verificación: nunca debe haber un "inicio" de una etiqueta
+            # mientras la otra etiqueta tiene un "inicio" sin su "fin"
+            # correspondiente todavía (eso sería overlap real).
+            abiertos = set()
+            for evento, etiqueta in orden:
+                if evento == "inicio":
+                    otras_abiertas = abiertos - {etiqueta}
+                    self.assertFalse(otras_abiertas,
+                        f"overlap detectado: {etiqueta} arrancó mientras {otras_abiertas} seguía abierto — "
+                        f"_batch_commit_lock no está serializando. Secuencia completa: {orden}")
+                    abiertos.add(etiqueta)
+                else:
+                    abiertos.discard(etiqueta)
+        finally:
+            shutil.rmtree(otro_dir, ignore_errors=True)
+
 
 # =====================================================================
 # Sprint E — extracción de campos con trazabilidad (capa determinística)

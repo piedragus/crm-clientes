@@ -53,6 +53,16 @@ _ia_lock     = threading.Lock()
 _ia_last     = 0.0
 _IA_MIN_GAP  = 5.0   # seconds between enricher calls
 
+# ── Serialización de commits de import_batches (issue #33) ───────────────────
+# SQLite (incluso en WAL) soporta un solo escritor a la vez. Sin esto, dos
+# batches grandes comitteándose en paralelo (2 pestañas, o el mismo usuario
+# disparando 2 commits casi al mismo tiempo) compiten por la conexión y
+# arriesgan sqlite3.OperationalError: database is locked si el timeout de
+# conexión expira mientras uno espera al otro. Con este lock, el segundo
+# simplemente espera (su batch queda en 'committing' visualmente, que es
+# honesto: literalmente está esperando a poder procesarse) en vez de competir.
+_batch_commit_lock = threading.Lock()
+
 def _ia_ratelimit():
     global _ia_last
     with _ia_lock:
@@ -2116,68 +2126,75 @@ def _ejecutar_commit_batch(batch_id):
     Actualiza los contadores del batch DESPUÉS DE CADA ITEM (no solo al
     final), para que el polling del frontend (GET /api/import_batches/<id>)
     muestre progreso real en vez de saltar de 0% a 100%.
+
+    Serializado con _batch_commit_lock (issue #33): si ya hay otro
+    commit corriendo, este simplemente espera a que termine antes de
+    arrancar a procesar — el batch queda en 'committing' (estado
+    honesto: literalmente está esperando turno) en vez de competir por
+    la conexión SQLite y arriesgar 'database is locked'.
     """
-    items = db.listar_import_items(batch_id, limit=100000)
-    batch_prev = db.obtener_import_batch(batch_id)
-    creados_acum     = batch_prev["creados"] or 0
-    actualizados_acum = batch_prev["actualizados"] or 0
-    errores = 0
+    with _batch_commit_lock:
+        items = db.listar_import_items(batch_id, limit=100000)
+        batch_prev = db.obtener_import_batch(batch_id)
+        creados_acum     = batch_prev["creados"] or 0
+        actualizados_acum = batch_prev["actualizados"] or 0
+        errores = 0
 
-    for item in items:
-        if item["estado"] in ("omitido", "importado"):
-            continue
-        try:
-            # Anti-duplicado por hash (si se calculó) además de por ruta
-            if item["file_hash"] and db.cotizacion_existe_por_hash(item["file_hash"]):
-                db.actualizar_import_item(item["id"], estado="omitido",
-                                          error="Duplicado por hash")
+        for item in items:
+            if item["estado"] in ("omitido", "importado"):
                 continue
+            try:
+                # Anti-duplicado por hash (si se calculó) además de por ruta
+                if item["file_hash"] and db.cotizacion_existe_por_hash(item["file_hash"]):
+                    db.actualizar_import_item(item["id"], estado="omitido",
+                                              error="Duplicado por hash")
+                    continue
 
-            empresa_id = item["empresa_id"]
-            if item["accion"] == "crear":
-                nombre = item["empresa_detectada"] or os.path.splitext(item["file_name"])[0]
-                # Por si dos items del mismo batch detectan la misma empresa nueva
-                existente = db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
-                if existente:
-                    empresa_id = existente["id"]
+                empresa_id = item["empresa_id"]
+                if item["accion"] == "crear":
+                    nombre = item["empresa_detectada"] or os.path.splitext(item["file_name"])[0]
+                    # Por si dos items del mismo batch detectan la misma empresa nueva
+                    existente = db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+                    if existente:
+                        empresa_id = existente["id"]
+                    else:
+                        if not db.agregar_empresa(nombre, "", "", "", "",
+                                                  item["pais_detectado"] or "", ""):
+                            raise RuntimeError(f"No se pudo crear empresa {nombre!r}")
+                        nueva = db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+                        empresa_id = nueva["id"] if nueva else None
+                        creados_acum += 1
+                elif item["accion"] == "usar_existente":
+                    if not empresa_id:
+                        raise RuntimeError("accion='usar_existente' sin empresa_id asignado")
+                    actualizados_acum += 1
                 else:
-                    if not db.agregar_empresa(nombre, "", "", "", "",
-                                              item["pais_detectado"] or "", ""):
-                        raise RuntimeError(f"No se pudo crear empresa {nombre!r}")
-                    nueva = db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
-                    empresa_id = nueva["id"] if nueva else None
-                    creados_acum += 1
-            elif item["accion"] == "usar_existente":
+                    continue  # 'omitir' ya filtrado arriba, no debería llegar acá
+
                 if not empresa_id:
-                    raise RuntimeError("accion='usar_existente' sin empresa_id asignado")
-                actualizados_acum += 1
-            else:
-                continue  # 'omitir' ya filtrado arriba, no debería llegar acá
+                    raise RuntimeError("No se pudo resolver la empresa destino")
 
-            if not empresa_id:
-                raise RuntimeError("No se pudo resolver la empresa destino")
+                ok_cot = db.agregar_cotizacion_con_ruta(
+                    empresa_id, "", 0, None, item["file_path"],
+                    archivo_hash=item["file_hash"])
+                if not ok_cot:
+                    raise RuntimeError("No se pudo insertar la cotización")
 
-            ok_cot = db.agregar_cotizacion_con_ruta(
-                empresa_id, "", 0, None, item["file_path"],
-                archivo_hash=item["file_hash"])
-            if not ok_cot:
-                raise RuntimeError("No se pudo insertar la cotización")
+                db.actualizar_import_item(item["id"], estado="importado",
+                                          empresa_id=empresa_id,
+                                          fecha_procesado=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            except Exception as e:
+                errores += 1
+                db.actualizar_import_item(item["id"], estado="error", error=str(e))
 
-            db.actualizar_import_item(item["id"], estado="importado",
-                                      empresa_id=empresa_id,
-                                      fecha_procesado=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        except Exception as e:
-            errores += 1
-            db.actualizar_import_item(item["id"], estado="error", error=str(e))
+            # Progreso incremental — el frontend hace polling de esto durante
+            # el procesamiento, no solo al terminar.
+            db.actualizar_import_batch(batch_id, creados=creados_acum,
+                                       actualizados=actualizados_acum, errores=errores)
 
-        # Progreso incremental — el frontend hace polling de esto durante
-        # el procesamiento, no solo al terminar.
-        db.actualizar_import_batch(batch_id, creados=creados_acum,
-                                   actualizados=actualizados_acum, errores=errores)
-
-    db.actualizar_import_batch(
-        batch_id, estado="completado",
-        fecha_commit=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        db.actualizar_import_batch(
+            batch_id, estado="completado",
+            fecha_commit=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 
 @app.route("/api/import_batches/<int:batch_id>/commit", methods=["POST"])
