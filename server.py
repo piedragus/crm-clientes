@@ -348,6 +348,19 @@ def put_empresa(eid):
 
 @app.route("/api/empresas/<int:eid>", methods=["DELETE"])
 def delete_empresa(eid):
+    # Issue del peer review de PR #37: si la empresa tiene recordatorios
+    # de seguimiento pendientes, avisar antes de borrar en cascada (los
+    # recordatorios de una empresa borrada no tienen ningún valor — ver
+    # ON DELETE CASCADE en tareas.empresa_id — pero el usuario debería
+    # poder decidir con esa información, no perderlos en silencio).
+    pendientes = db.fetchone(
+        "SELECT COUNT(*) as n FROM tareas WHERE empresa_id=? AND estado='pendiente'",
+        (eid,))
+    n_pendientes = pendientes["n"] if pendientes else 0
+    if n_pendientes and not request.args.get("confirmar"):
+        return err(f"Esta empresa tiene {n_pendientes} recordatorio(s) de seguimiento "
+                  f"pendiente(s). Se van a perder si la borrás. Reintentá con "
+                  f"?confirmar=1 para confirmar.", 409)
     db.eliminar_empresa(eid)
     return ok()
 
@@ -1894,6 +1907,8 @@ def post_watcher_marcar_vistos():
 
 
 # ── Recordatorios de seguimiento ──────────────────────────────────────────────
+TIPOS_TAREA_VALIDOS = {"seguimiento", "llamada", "mail", "reunion"}
+ESTADOS_TAREA_VALIDOS = {"completada", "cancelada"}
 @app.route("/api/tareas")
 def get_tareas():
     estado = request.args.get("estado", "pendiente")
@@ -1910,9 +1925,10 @@ def post_tarea(eid):
     fecha_vencimiento = clean(b.get("fecha_vencimiento"))
     if not fecha_vencimiento:
         return err("Falta la fecha de vencimiento")
+    tipo_in = (clean(b.get("tipo")) or "").strip().lower()
+    tipo = tipo_in if tipo_in in TIPOS_TAREA_VALIDOS else "seguimiento"
     tid = db.crear_tarea(
-        eid, descripcion, fecha_vencimiento,
-        tipo=clean(b.get("tipo")) or "seguimiento",
+        eid, descripcion, fecha_vencimiento, tipo=tipo,
         cotizacion_id=to_int(b.get("cotizacion_id"), 0, lo=0) or None)
     if not tid:
         return err("No se pudo crear el recordatorio")

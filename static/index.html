@@ -651,6 +651,11 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           </label>
           <input type="date" id="act-recordar-fecha" disabled
                  style="font-size:11px;padding:2px 4px">
+          <button class="btn btn-ghost" onclick="nuevaTareaStandalone()"
+                  style="margin-left:auto;font-size:10px;padding:2px 8px"
+                  title="Agendar un recordatorio sin tener que registrar una actividad primero">
+            ➕ Nueva tarea
+          </button>
         </div>
         <div style="flex:1;overflow-y:auto">
           <div class="timeline" id="act-timeline">
@@ -1606,8 +1611,16 @@ async function saveEmpresa() {
 async function delEmpresa() {
   if (!S.selEmpresa) return;
   if (!confirm(`¿Eliminar "${S.selEmpresa.nombre}" y todos sus datos?`)) return;
-  const r = await DEL(`/api/empresas/${S.selEmpresa.id}`);
-  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  let r = await DEL(`/api/empresas/${S.selEmpresa.id}`);
+  if (!r.ok) {
+    // Tiene recordatorios pendientes (issue del review de PR #37) —
+    // ofrecer confirmar de nuevo explícitamente antes de perderlos.
+    if ((r.error||"").includes("recordatorio")) {
+      if (!confirm(r.error + "\n\n¿Confirmar de todas formas?")) return;
+      r = await DEL(`/api/empresas/${S.selEmpresa.id}?confirmar=1`);
+    }
+    if (!r.ok) { toast(r.error||"Error","err"); return; }
+  }
   toast("Empresa eliminada");
   S.selEmpresa = null;
   document.getElementById("detail-name").textContent = "Seleccioná una empresa";
@@ -2120,6 +2133,24 @@ async function completarTarea(tid) {
   const r = await PUT(`/api/tareas/${tid}`, {estado: "completada"});
   if (!r.ok) { toast(r.error||"Error","err"); return; }
   toast("Recordatorio completado");
+  await loadTareasPendientes();
+}
+
+async function nuevaTareaStandalone() {
+  if (!S.selEmpresa) { toast("Seleccioná una empresa primero", "err"); return; }
+  const descripcion = prompt("¿Qué hay que hacer?", "Llamar para seguimiento");
+  if (descripcion === null || !descripcion.trim()) return;
+  const fecha = prompt("¿Para qué fecha? (formato AAAA-MM-DD)",
+                       new Date().toISOString().slice(0,10));
+  if (fecha === null) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha.trim())) {
+    toast("Fecha inválida — usá el formato AAAA-MM-DD", "err");
+    return;
+  }
+  const r = await POST(`/api/empresas/${S.selEmpresa.id}/tareas`,
+                       {descripcion: descripcion.trim(), fecha_vencimiento: fecha.trim()});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Recordatorio creado");
   await loadTareasPendientes();
 }
 
@@ -3738,6 +3769,11 @@ async function delMultiEmpresas() {
   if (ids.length === 0) return;
   if (!confirm(`¿Eliminar ${ids.length} empresa${ids.length > 1 ? "s" : ""} y todos sus datos?\nEsta acción no se puede deshacer.`)) return;
 
+  // Nota: si alguna tiene recordatorios pendientes, el DELETE individual
+  // va a fallar con 409 (igual que en delEmpresa) y se cuenta como error
+  // acá abajo — no se pide confirmación por cada una (sería un popup por
+  // empresa, mala UX para un borrado masivo). Si hace falta forzarlas
+  // también, hoy hay que borrarlas de una por una desde el detalle.
   let ok = 0, err = 0;
   for (const id of ids) {
     const r = await DEL(`/api/empresas/${id}`);

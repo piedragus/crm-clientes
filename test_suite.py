@@ -6875,6 +6875,55 @@ class TestTareasSeguimiento(unittest.TestCase):
         descripciones = [t["descripcion"] for t in r.get_json()["data"]]
         self.assertEqual(descripciones, ["Primera", "Segunda", "Tercera"])
 
+    def test_tipo_valido_se_acepta_tal_cual(self):
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "X", "fecha_vencimiento": self._fecha(1),
+                                   "tipo": "llamada"})
+        tid = r.get_json()["data"]["id"]
+        tarea = self.db.fetchone("SELECT tipo FROM tareas WHERE id=?", (tid,))
+        self.assertEqual(tarea["tipo"], "llamada")
+
+    def test_tipo_invalido_cae_a_seguimiento_por_default(self):
+        """Peer review PR #37: en vez de texto libre sin validar (que
+        contamina la columna con 'Llamar'/'call'/'teléfono' variantes),
+        cualquier valor fuera de la lista cerrada cae al default."""
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "X", "fecha_vencimiento": self._fecha(1),
+                                   "tipo": "telefono"})
+        tid = r.get_json()["data"]["id"]
+        tarea = self.db.fetchone("SELECT tipo FROM tareas WHERE id=?", (tid,))
+        self.assertEqual(tarea["tipo"], "seguimiento")
+
+    def test_tipo_mayusculas_se_normaliza(self):
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "X", "fecha_vencimiento": self._fecha(1),
+                                   "tipo": "LLAMADA"})
+        tid = r.get_json()["data"]["id"]
+        tarea = self.db.fetchone("SELECT tipo FROM tareas WHERE id=?", (tid,))
+        self.assertEqual(tarea["tipo"], "llamada")
+
+    def test_borrar_empresa_con_tareas_pendientes_avisa_antes(self):
+        """Peer review PR #37: no borrar en silencio los recordatorios
+        pendientes — el DELETE debe rechazarse con 409 a menos que se
+        confirme explícitamente."""
+        self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                         json={"descripcion": "Pendiente", "fecha_vencimiento": self._fecha(1)})
+
+        r = self.client.delete(f"/api/empresas/{self.empresa_id}")
+        self.assertEqual(r.status_code, 409)
+        # La empresa NO debe haberse borrado todavía
+        self.assertIsNotNone(self.db.obtener_empresa_por_id(self.empresa_id))
+
+        r2 = self.client.delete(f"/api/empresas/{self.empresa_id}?confirmar=1")
+        self.assertEqual(r2.status_code, 200)
+        self.assertIsNone(self.db.obtener_empresa_por_id(self.empresa_id))
+        self.creadas = []  # ya se borró, no hace falta que tearDown lo intente de nuevo
+
+    def test_borrar_empresa_sin_tareas_pendientes_no_pide_confirmacion(self):
+        r = self.client.delete(f"/api/empresas/{self.empresa_id}")
+        self.assertEqual(r.status_code, 200)
+        self.creadas = []
+
 
 if __name__ == "__main__":
     loader = unittest.TestLoader()
