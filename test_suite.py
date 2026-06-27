@@ -6631,6 +6631,48 @@ class TestWatcherHandler(unittest.TestCase):
         self.assertTrue(self.db.marcar_eventos_watcher_vistos())
         self.assertEqual(self.db.contar_eventos_watcher_no_vistos(), 0)
 
+    def test_rafaga_de_archivos_no_dispara_un_thread_por_archivo(self):
+        """Peer review PR #34: con threading.Timer por archivo, una
+        sincronización inicial de OneDrive con miles de archivos
+        históricos lanzaría miles de threads del sistema operativo
+        simultáneos. El patrón single-worker-queue debe mantener el
+        conteo de threads constante sea 1 archivo o 50."""
+        import threading
+        from watchdog.observers import Observer
+        import watcher.watcher_handler as wh
+
+        N = 50
+        carpetas = []
+        for i in range(N):
+            carpeta = os.path.join(self.tmpdir, f"ClienteRafaga{i}")
+            os.makedirs(carpeta)
+            carpetas.append(carpeta)
+            self.creadas.append(f"ClienteRafaga{i}")
+
+        handler = wh.CotizacionHandler(self.db, self.tmpdir, poll_interval=0.1)
+        observer = Observer()
+        observer.schedule(handler, self.tmpdir, recursive=True)
+        observer.start()
+        time.sleep(0.3)
+        threads_en_reposo = threading.active_count()
+        try:
+            for i, carpeta in enumerate(carpetas):
+                with open(os.path.join(carpeta, "cot.pdf"), "w") as f:
+                    f.write(f"%PDF-1.4 contenido único rafaga {i}")
+
+            time.sleep(0.3)
+            threads_durante_rafaga = threading.active_count()
+            # Con el patrón viejo (1 Timer por archivo) esto hubiera sido
+            # threads_en_reposo + N. Con el worker único, la diferencia
+            # debe ser chica (como mucho el thread propio del handler).
+            self.assertLessEqual(threads_durante_rafaga, threads_en_reposo + 2,
+                f"se esperaban ~{threads_en_reposo} threads, hay {threads_durante_rafaga} "
+                f"— sugiere que se está creando un thread por archivo en vez de un worker único")
+        finally:
+            observer.stop()
+            handler.detener()
+            observer.join(timeout=2)
+
 
 if __name__ == "__main__":
     loader = unittest.TestLoader()

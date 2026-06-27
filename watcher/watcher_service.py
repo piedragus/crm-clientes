@@ -50,6 +50,7 @@ def iniciar(root_path: str, db_name: str = "clientes_v2.db"):
             time.sleep(LOOP_SLEEP_SECONDS)
     except KeyboardInterrupt:
         observer.stop()
+        handler.detener()
         print("\nWatcher detenido.")
         logging.info("Watcher detenido por el usuario (Ctrl+C)")
     observer.join()
