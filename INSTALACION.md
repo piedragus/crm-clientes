@@ -48,6 +48,15 @@ importa cotizaciones nuevas automáticamente al CRM, sin que tengas
 que usar el importador manual. Corre en paralelo al servidor web (son
 2 procesos independientes que comparten la misma base de datos).
 
+**Para arrancar los dos juntos (recomendado):**
+```bat
+iniciar_todo.bat "C:\Users\TuUsuario\OneDrive\Cotizaciones"
+```
+Abre 2 ventanas de consola, una por proceso — cerrá cada una por
+separado para detenerlas.
+
+**Para arrancar solo el watcher:**
+
 **Windows:**
 ```bat
 watcher\run_watcher.bat "C:\Users\TuUsuario\OneDrive\Cotizaciones"
