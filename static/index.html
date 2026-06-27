@@ -1330,6 +1330,25 @@ async function init() {
   }
   await Promise.all([loadStats(), loadEmpresas(), loadFilterMeta(),
                      loadActividadesRecientes()]);
+  pollearWatcher();
+  setInterval(pollearWatcher, 30000);
+}
+
+// ── Sprint F: notificaciones del watcher de OneDrive ──────────────────────────
+// El watcher corre como proceso de consola separado (Sprint F) y escribe
+// directo a la DB compartida — no hay WebSockets en este proyecto, así
+// que el aviso de "llegaron archivos nuevos" es por polling cada 30s.
+async function pollearWatcher() {
+  const r = await GET("/api/watcher/eventos");
+  if (!r.ok || !r.data.length) return;
+  const importados = r.data.filter(e => e.estado === "importado");
+  if (importados.length) {
+    const nombres = [...new Set(importados.map(e => e.empresa_nombre).filter(Boolean))];
+    toast(`📂 Watcher: ${importados.length} archivo(s) nuevo(s) importado(s)` +
+          (nombres.length ? ` (${nombres.slice(0,3).join(", ")}${nombres.length>3?"…":""})` : ""));
+    await Promise.all([loadEmpresas(), loadStats()]);
+  }
+  await POST("/api/watcher/eventos/marcar_vistos");
 }
 
 async function loadStats() {

@@ -241,13 +241,22 @@ class DBManager:
                         snapshot_texto TEXT,
                         fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(cotizacion_id, campo),
-                        FOREIGN KEY (cotizacion_id) REFERENCES cotizaciones (id) ON DELETE CASCADE)'''
+                        FOREIGN KEY (cotizacion_id) REFERENCES cotizaciones (id) ON DELETE CASCADE)''',
+                    '''CREATE TABLE IF NOT EXISTS watcher_eventos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        fecha TEXT DEFAULT CURRENT_TIMESTAMP,
+                        archivo_path TEXT NOT NULL,
+                        empresa_nombre TEXT,
+                        estado TEXT NOT NULL,
+                        motivo TEXT,
+                        visto INTEGER DEFAULT 0)'''
                 ]
                 for tabla in tablas:
                     c.execute(tabla)
                 c.execute("CREATE INDEX IF NOT EXISTS idx_import_items_batch ON import_items(batch_id, estado)")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_import_items_hash ON import_items(file_hash)")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_extraccion_campos_cot ON extraccion_campos(cotizacion_id)")
+                c.execute("CREATE INDEX IF NOT EXISTS idx_watcher_eventos_visto ON watcher_eventos(visto)")
                     
                 # Migración para añadir columna de país a contactos si no existe
                 c.execute("PRAGMA table_info(contactos)")
@@ -1215,6 +1224,34 @@ class DBManager:
             "SELECT * FROM extraccion_campos WHERE cotizacion_id=? AND campo=?",
             (cotizacion_id, campo))
         return dict(row) if row else None
+
+    # ── Sprint F: notificaciones del watcher de OneDrive ───────────────────────
+
+    def registrar_evento_watcher(self, archivo_path: str, estado: str,
+                                 empresa_nombre: str = None, motivo: str = None) -> bool:
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO watcher_eventos (archivo_path, empresa_nombre, estado, motivo)
+                    VALUES (?, ?, ?, ?)
+                """, (archivo_path, empresa_nombre, estado, motivo))
+                conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Error al registrar evento de watcher ({archivo_path!r}): {e}")
+            return False
+
+    def listar_eventos_watcher_no_vistos(self, limit: int = 50) -> list:
+        return self.fetchall(
+            "SELECT * FROM watcher_eventos WHERE visto=0 ORDER BY id DESC LIMIT ?",
+            (limit,))
+
+    def contar_eventos_watcher_no_vistos(self) -> int:
+        row = self.fetchone("SELECT COUNT(*) as n FROM watcher_eventos WHERE visto=0")
+        return row["n"] if row else 0
+
+    def marcar_eventos_watcher_vistos(self) -> bool:
+        return self.ejecutar("UPDATE watcher_eventos SET visto=1 WHERE visto=0")
 
     def editar_cotizacion(self, cotizacion_id: int, descripcion: str,
                           monto: float, tipo: str = None,

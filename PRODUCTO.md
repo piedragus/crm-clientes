@@ -169,35 +169,31 @@ CRM de ventas industriales para gestionar el ciclo comercial completo: desde el 
 
 ---
 
-### 🔜 Sprint F — Watcher de carpeta OneDrive
-*Requiere Sprint C (para tener entry point de importación por archivo único)*
+### ✅ Sprint F — Watcher de carpeta OneDrive
+*Completo*
 
-Proceso Python con `watchdog` que detecta PDFs nuevos en la carpeta de OneDrive en tiempo real y los importa automáticamente al CRM.
+Proceso Python con `watchdog` que detecta archivos nuevos en la carpeta de OneDrive en tiempo real y los importa automáticamente al CRM.
 
-**Features:**
-- Proceso en consola (no Windows Service), arranca con `.bat`
-- Detecta eventos `ON_CREATED` / `ON_MOVED` sobre la raíz de OneDrive
-- Reutiliza importer refactorizado (Sprint C) + alias resolution (Sprint B)
-- Deduplicación por `file_sha256` (sin reimportar lo ya conocido)
-- Notificaciones en el CRM al llegar PDFs nuevos (badge / toast)
+**Hecho:**
+- [x] Proceso en consola (no Windows Service), arranca con `watcher/run_watcher.bat`
+- [x] Detecta eventos `ON_CREATED` / `ON_MOVED` sobre la raíz de OneDrive, con debounce de 5s por archivo (OneDrive puede disparar varios eventos mientras todavía sincroniza el contenido)
+- [x] `importer/single_file.py::importar_archivo()` — el entry point de archivo único que faltaba (ver "decisión técnica pendiente" más abajo, ya resuelta)
+- [x] Deduplicación por `file_sha256` Y por ruta exacta (relevante para OneDrive: un archivo se puede mover/renombrar y volver a sincronizar)
+- [x] Notificaciones en el CRM: tabla `watcher_eventos` + endpoints `GET /api/watcher/eventos` / `POST /api/watcher/eventos/marcar_vistos`, polling cada 30s desde el frontend (toast con cantidad y empresas)
 
-**Carpetas excluidas** (sincronizar con `GENERIC_FOLDERS` del importer):
-- `00 COTIZACIONES TIPO DE MAQ` — plantillas por tipo de máquina
-- `AA CODIGO DE MAQUINAS` — códigos internos
-- `AAA PARTES DE MAQ` — partes y repuestos
-- `ALAMBRES- BARRAS` — catálogos de producto
-- `MANUAL` / `MANUAL MAQUINA` — manuales técnicos
-- `FOTOS*` — imágenes
-- `Estructura` — hojas membretadas
-- `Prearmados de Maquinas` — plantillas de armado
+**Carpetas excluidas** (`watcher/watcher_config.py` — exclusión propia, **no** agregada a `GENERIC_FOLDERS` del importer a propósito: son conceptualmente distintas — GENERIC_FOLDERS dice "esta carpeta no es el nombre del cliente" pero el archivo SÍ se importa; las exclusiones del watcher dicen "este archivo no es una cotización, no lo importes en absoluto"):
+- `00 COTIZACIONES TIPO DE MAQ`, `AA CODIGO DE MAQUINAS`, `AAA PARTES DE MAQ`, `ALAMBRES- BARRAS`, `MANUAL`/`MANUAL MAQUINA`, `Estructura`, `Prearmados de Maquinas` (match exacto)
+- `FOTOS*` (por prefijo)
 
-**Decisión técnica pendiente:** verificar si el importer (post Sprint C) expone un entry point por archivo único (`import_single_file(path)`) o solo procesa directorios. Define si hay que wrappear o refactorizar antes de arrancar este sprint.
+**Decisión técnica que estaba pendiente, ya resuelta:** el importer post-Sprint C NO exponía un entry point de archivo único — todos los endpoints de importación masiva procesaban directorios completos con la lógica de "crear empresa + insertar cotización" duplicada inline en cada uno. Se creó `importer/single_file.py::importar_archivo(db, path, root_path)` como la primera función reutilizable para ese caso. Los endpoints existentes de `server.py` NO se refactorizaron para usarla (cambio de mayor riesgo, fuera de alcance) — queda como deuda técnica de unificación si se quiere consolidar todo en un solo lugar a futuro.
 
-**Componentes planificados:**
-- `watcher/watcher_service.py` — loop principal watchdog
-- `watcher/watcher_config.py` — ruta base, filtros, carpetas excluidas
-- `watcher/watcher_handler.py` — extrae país/empresa/filename, llama al importer
-- `watcher/run_watcher.bat` — launcher Windows con activación de venv
+**Componentes:**
+- `watcher/watcher_service.py` — loop principal, punto de entrada por consola
+- `watcher/watcher_config.py` — exclusiones, extensiones, debounce
+- `watcher/watcher_handler.py` — maneja eventos de filesystem (watchdog)
+- `watcher/run_watcher.bat` — launcher Windows
+
+**Tests:** `TestWatcherConfig` (4, exclusiones) + `TestWatcherHandler` (4, con un Observer real de watchdog sobre una carpeta temporal — ejercita filesystem real, no solo mocks) + `TestImportarArchivoUnico` (6, el entry point). 15 tests nuevos en total para este sprint.
 
 ---
 

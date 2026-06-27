@@ -41,6 +41,41 @@ normalmente — los PDFs escaneados simplemente quedan con sus campos
 en estado "pendiente de revisión" para completar a mano, en vez de
 intentar OCR.
 
+## Watcher de OneDrive (opcional, Sprint F)
+
+Proceso de consola separado que vigila una carpeta de OneDrive y
+importa cotizaciones nuevas automáticamente al CRM, sin que tengas
+que usar el importador manual. Corre en paralelo al servidor web (son
+2 procesos independientes que comparten la misma base de datos).
+
+**Para arrancar los dos juntos (recomendado):**
+```bat
+iniciar_todo.bat "C:\Users\TuUsuario\OneDrive\Cotizaciones"
+```
+Abre 2 ventanas de consola, una por proceso — cerrá cada una por
+separado para detenerlas.
+
+**Para arrancar solo el watcher:**
+
+**Windows:**
+```bat
+watcher\run_watcher.bat "C:\Users\TuUsuario\OneDrive\Cotizaciones"
+```
+(o doble click en `run_watcher.bat` y te pide la ruta)
+
+**Linux/Mac:**
+```bash
+python watcher/watcher_service.py "/ruta/a/OneDrive/Cotizaciones"
+```
+
+Carpetas que el watcher ignora a propósito (manuales, fotos,
+catálogos de partes, plantillas — ver `watcher/watcher_config.py` para
+la lista completa). Cuando importa algo nuevo, aparece un toast en el
+CRM web la próxima vez que esté abierto (polling cada 30s) — no hace
+falta que el watcher y el navegador estén abiertos al mismo tiempo,
+los archivos quedan importados igual, el aviso es solo para que te
+enteres si tenías el CRM abierto en ese momento.
+
 ## Variables de entorno IA
 
 ```text

@@ -6397,6 +6397,283 @@ class TestOcrFallback(unittest.TestCase):
             _db.eliminar_empresa(emp["id"])
 
 
+
+
+# =====================================================================
+# Sprint F — importer.importar_archivo (entry point de archivo único,
+# que necesita el watcher de OneDrive)
+# =====================================================================
+class TestImportarArchivoUnico(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import db as _db
+        from importer import importar_archivo
+        self.db = _db
+        self.importar_archivo = importar_archivo
+        self.tmpdir = tempfile.mkdtemp()
+        self.creadas = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in self.creadas:
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+
+    def _crear_archivo(self, *partes_carpeta, nombre="cot.pdf", contenido="%PDF-1.4"):
+        carpeta = os.path.join(self.tmpdir, *partes_carpeta)
+        os.makedirs(carpeta, exist_ok=True)
+        path = os.path.join(carpeta, nombre)
+        with open(path, "w") as f:
+            f.write(contenido)
+        return path
+
+    def test_importa_archivo_nuevo_crea_empresa_y_cotizacion(self):
+        path = self._crear_archivo("Argentina", "ClienteWatcherUno")
+        self.creadas.append("ClienteWatcherUno")
+        r = self.importar_archivo(self.db, path, self.tmpdir)
+        self.assertEqual(r["estado"], "importado")
+        self.assertEqual(r["empresa_nombre"], "ClienteWatcherUno")
+        emp = self.db.fetchone("SELECT pais FROM empresas WHERE nombre='ClienteWatcherUno'")
+        self.assertEqual(emp["pais"], "Argentina")
+        cot = self.db.fetchone(
+            "SELECT id FROM cotizaciones WHERE ruta_archivo=?", (path,))
+        self.assertIsNotNone(cot)
+
+    def test_mismo_archivo_dos_veces_se_omite_por_ruta(self):
+        path = self._crear_archivo("ClienteWatcherDos")
+        self.creadas.append("ClienteWatcherDos")
+        self.importar_archivo(self.db, path, self.tmpdir)
+        r2 = self.importar_archivo(self.db, path, self.tmpdir)
+        self.assertEqual(r2["estado"], "omitido")
+        self.assertIn("ruta", r2["motivo"])
+
+    def test_mismo_contenido_otra_ruta_se_omite_por_hash(self):
+        path1 = self._crear_archivo("ClienteWatcherTres", nombre="a.pdf",
+                                    contenido="contenido idéntico")
+        path2 = self._crear_archivo("ClienteWatcherTres", nombre="b.pdf",
+                                    contenido="contenido idéntico")
+        self.creadas.append("ClienteWatcherTres")
+        self.importar_archivo(self.db, path1, self.tmpdir)
+        r2 = self.importar_archivo(self.db, path2, self.tmpdir)
+        self.assertEqual(r2["estado"], "omitido")
+        self.assertIn("hash", r2["motivo"])
+
+    def test_extension_no_soportada_se_omite_sin_crashear(self):
+        path = self._crear_archivo("ClienteWatcherCuatro", nombre="imagen.jpg")
+        r = self.importar_archivo(self.db, path, self.tmpdir)
+        self.assertEqual(r["estado"], "omitido")
+        emp = self.db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteWatcherCuatro'")
+        self.assertIsNone(emp, "no debe crear empresa para un archivo que ni se procesa")
+
+    def test_archivo_inexistente_no_crashea(self):
+        r = self.importar_archivo(self.db, "/ruta/que/no/existe.pdf", self.tmpdir)
+        self.assertEqual(r["estado"], "error")
+        self.assertIsNotNone(r["motivo"])
+
+    def test_empresa_ya_existente_no_se_duplica(self):
+        self.db.agregar_empresa("ClienteWatcherCinco", "", "", "", "", "Brasil", "")
+        self.creadas.append("ClienteWatcherCinco")
+        emp_antes = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='ClienteWatcherCinco'")
+
+        path = self._crear_archivo("ClienteWatcherCinco")
+        r = self.importar_archivo(self.db, path, self.tmpdir)
+        self.assertEqual(r["estado"], "importado")
+        self.assertEqual(r["empresa_id"], emp_antes["id"],
+            "debe reusar la empresa existente, no crear una segunda")
+        total = self.db.fetchall(
+            "SELECT id FROM empresas WHERE nombre='ClienteWatcherCinco'")
+        self.assertEqual(len(total), 1)
+
+
+
+
+# =====================================================================
+# Sprint F — watcher de OneDrive
+# =====================================================================
+class TestWatcherConfig(unittest.TestCase):
+    """Tests de watcher_config.py — exclusiones de carpeta, sin
+    depender de watchdog ni de un Observer real."""
+
+    def test_carpeta_excluida_match_exacto(self):
+        from watcher.watcher_config import carpeta_excluida
+        self.assertTrue(carpeta_excluida("MANUAL"))
+        self.assertTrue(carpeta_excluida("manual maquina"))
+        self.assertTrue(carpeta_excluida("Estructura"))
+
+    def test_carpeta_excluida_por_prefijo_fotos(self):
+        from watcher.watcher_config import carpeta_excluida
+        self.assertTrue(carpeta_excluida("FOTOS"))
+        self.assertTrue(carpeta_excluida("Fotos Cliente"))
+        self.assertTrue(carpeta_excluida("fotos 2024"))
+
+    def test_carpeta_normal_no_excluida(self):
+        from watcher.watcher_config import carpeta_excluida
+        self.assertFalse(carpeta_excluida("Argentina"))
+        self.assertFalse(carpeta_excluida("ClienteCualquiera"))
+
+    def test_ruta_excluida_si_alguna_carpeta_en_el_camino_lo_esta(self):
+        from watcher.watcher_config import ruta_excluida
+        root = "/onedrive"
+        self.assertTrue(ruta_excluida("/onedrive/Argentina/FOTOS/img.jpg", root))
+        self.assertTrue(ruta_excluida("/onedrive/MANUAL/manual.pdf", root))
+        self.assertFalse(ruta_excluida("/onedrive/Argentina/Cliente/cot.pdf", root))
+
+
+class TestWatcherHandler(unittest.TestCase):
+    """Tests del handler de eventos con un Observer real de watchdog,
+    sobre una carpeta temporal — esto SÍ ejercita filesystem real
+    (create/move), no solo mocks, para confirmar que watchdog entrega
+    los eventos como se espera en este sistema operativo."""
+
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import db as _db
+        self.db = _db
+        self.tmpdir = tempfile.mkdtemp()
+        self.creadas = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for nombre in self.creadas:
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+        with self.db._get_connection() as conn:
+            conn.execute("DELETE FROM watcher_eventos")
+            conn.commit()
+
+    def _correr_observer(self, accion, timeout=3, debounce=0.3):
+        """Levanta un Observer real sobre self.tmpdir, ejecuta `accion`
+        (que crea/mueve un archivo), espera a que el handler procese
+        (con un debounce corto para que el test no tarde de verdad los
+        5s de producción), y lo apaga.
+
+        watcher_handler.py hace 'from .watcher_config import
+        DEBOUNCE_SECONDS' — un import de nombre, no una referencia viva
+        al módulo. Por eso para parchear el valor hace falta parchear
+        el módulo de config y recargar watcher_handler DESPUÉS, en ese
+        orden, para que vuelva a leer el valor ya parcheado."""
+        from watchdog.observers import Observer
+        import importlib
+        import watcher.watcher_config as cfg
+        import watcher.watcher_handler as wh
+
+        debounce_original = cfg.DEBOUNCE_SECONDS
+        cfg.DEBOUNCE_SECONDS = debounce
+        importlib.reload(wh)
+        resultados = []
+        try:
+            handler = wh.CotizacionHandler(self.db, self.tmpdir,
+                                           on_resultado=resultados.append)
+            observer = Observer()
+            observer.schedule(handler, self.tmpdir, recursive=True)
+            observer.start()
+            try:
+                accion()
+                deadline = time.time() + timeout
+                while time.time() < deadline and not resultados:
+                    time.sleep(0.05)
+            finally:
+                observer.stop()
+                observer.join(timeout=2)
+        finally:
+            cfg.DEBOUNCE_SECONDS = debounce_original
+            importlib.reload(wh)
+        return resultados
+
+    def test_archivo_nuevo_se_importa_automaticamente(self):
+        carpeta = os.path.join(self.tmpdir, "Uruguay", "ClienteWatcherE2E")
+        os.makedirs(carpeta)
+        self.creadas.append("ClienteWatcherE2E")
+
+        def crear():
+            with open(os.path.join(carpeta, "cot.pdf"), "w") as f:
+                f.write("%PDF-1.4 contenido único test e2e watcher")
+
+        resultados = self._correr_observer(crear)
+        self.assertEqual(len(resultados), 1)
+        self.assertEqual(resultados[0]["estado"], "importado")
+        emp = self.db.fetchone(
+            "SELECT pais FROM empresas WHERE nombre='ClienteWatcherE2E'")
+        self.assertEqual(emp["pais"], "Uruguay")
+
+    def test_archivo_en_carpeta_excluida_no_se_importa(self):
+        carpeta = os.path.join(self.tmpdir, "Argentina", "FOTOS")
+        os.makedirs(carpeta)
+
+        def crear():
+            with open(os.path.join(carpeta, "foto.jpg"), "w") as f:
+                f.write("no es una cotizacion")
+
+        resultados = self._correr_observer(crear, timeout=1.5)
+        self.assertEqual(len(resultados), 0,
+            "un archivo en carpeta excluida no debe disparar ningún resultado")
+
+    def test_evento_queda_registrado_en_watcher_eventos(self):
+        carpeta = os.path.join(self.tmpdir, "ClienteWatcherEventos")
+        os.makedirs(carpeta)
+        self.creadas.append("ClienteWatcherEventos")
+
+        def crear():
+            with open(os.path.join(carpeta, "cot.pdf"), "w") as f:
+                f.write("%PDF-1.4 evento de watcher unico")
+
+        self._correr_observer(crear)
+        eventos = self.db.listar_eventos_watcher_no_vistos()
+        self.assertTrue(any(e["empresa_nombre"] == "ClienteWatcherEventos"
+                            for e in eventos))
+
+    def test_marcar_eventos_vistos_los_limpia(self):
+        self.db.registrar_evento_watcher("/fake/path.pdf", "importado", "FakeCo")
+        self.assertGreater(self.db.contar_eventos_watcher_no_vistos(), 0)
+        self.assertTrue(self.db.marcar_eventos_watcher_vistos())
+        self.assertEqual(self.db.contar_eventos_watcher_no_vistos(), 0)
+
+    def test_rafaga_de_archivos_no_dispara_un_thread_por_archivo(self):
+        """Peer review PR #34: con threading.Timer por archivo, una
+        sincronización inicial de OneDrive con miles de archivos
+        históricos lanzaría miles de threads del sistema operativo
+        simultáneos. El patrón single-worker-queue debe mantener el
+        conteo de threads constante sea 1 archivo o 50."""
+        import threading
+        from watchdog.observers import Observer
+        import watcher.watcher_handler as wh
+
+        N = 50
+        carpetas = []
+        for i in range(N):
+            carpeta = os.path.join(self.tmpdir, f"ClienteRafaga{i}")
+            os.makedirs(carpeta)
+            carpetas.append(carpeta)
+            self.creadas.append(f"ClienteRafaga{i}")
+
+        handler = wh.CotizacionHandler(self.db, self.tmpdir, poll_interval=0.1)
+        observer = Observer()
+        observer.schedule(handler, self.tmpdir, recursive=True)
+        observer.start()
+        time.sleep(0.3)
+        threads_en_reposo = threading.active_count()
+        try:
+            for i, carpeta in enumerate(carpetas):
+                with open(os.path.join(carpeta, "cot.pdf"), "w") as f:
+                    f.write(f"%PDF-1.4 contenido único rafaga {i}")
+
+            time.sleep(0.3)
+            threads_durante_rafaga = threading.active_count()
+            # Con el patrón viejo (1 Timer por archivo) esto hubiera sido
+            # threads_en_reposo + N. Con el worker único, la diferencia
+            # debe ser chica (como mucho el thread propio del handler).
+            self.assertLessEqual(threads_durante_rafaga, threads_en_reposo + 2,
+                f"se esperaban ~{threads_en_reposo} threads, hay {threads_durante_rafaga} "
+                f"— sugiere que se está creando un thread por archivo en vez de un worker único")
+        finally:
+            observer.stop()
+            handler.detener()
+            observer.join(timeout=2)
+
+
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = loader.loadTestsFromModule(__import__(__name__))
