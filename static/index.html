@@ -316,6 +316,22 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
               margin-bottom:2px;cursor:pointer;color:var(--txt2)}
 .act-rec-item:hover{background:var(--sidebar2);color:#fff}
 .act-rec-empresa{font-weight:700;color:#93C5FD}
+
+/* Próximos seguimientos (recordatorios) en sidebar — color-coding por
+   urgencia, mismo patrón que OnePageCRM: vencida=rojo, hoy/próxima=amarillo */
+#tareas-pendientes{padding:6px 8px;max-height:180px;overflow-y:auto}
+.tarea-item{font-size:10px;padding:3px 4px;border-radius:3px;
+            margin-bottom:2px;display:flex;align-items:center;gap:4px;color:var(--txt2)}
+.tarea-item:hover{background:var(--sidebar2);color:#fff}
+.tarea-item .tarea-empresa{font-weight:700;flex:1;cursor:pointer;
+                            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tarea-item.tarea-vencida{color:#FCA5A5}
+.tarea-item.tarea-vencida .tarea-empresa{color:#FCA5A5}
+.tarea-item.tarea-proxima{color:#FCD34D}
+.tarea-item.tarea-proxima .tarea-empresa{color:#FCD34D}
+.tarea-check{cursor:pointer;font-size:11px;opacity:.7}
+.tarea-check:hover{opacity:1}
+
 #placeholder{display:flex;flex-direction:column;align-items:center;
              justify-content:center;flex:1;color:var(--muted);gap:8px;
              font-size:13px}
@@ -341,6 +357,11 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
   </div>
   <div class="nav-item" onclick="showSearch()">
     <span style="font-size:12px">🔍</span> Buscar cotizaciones
+  </div>
+
+  <div class="nav-sep">Próximos seguimientos</div>
+  <div id="tareas-pendientes">
+    <div style="font-size:10px;color:var(--muted);padding:4px 8px">Cargando…</div>
   </div>
 
   <div class="nav-sep">Actividad reciente</div>
@@ -622,6 +643,14 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
           <input id="act-texto" placeholder="Escribí una nota o registrá actividad… (Enter para guardar)"
                  onkeydown="if(event.key==='Enter')agregarActividad()">
           <button class="btn btn-ok" id="btn-add-act" onclick="agregarActividad()" disabled>+</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;margin:4px 0;font-size:11px;color:var(--muted)">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" id="act-recordar-chk" onchange="document.getElementById('act-recordar-fecha').disabled=!this.checked">
+            Recordarme seguir esto el
+          </label>
+          <input type="date" id="act-recordar-fecha" disabled
+                 style="font-size:11px;padding:2px 4px">
         </div>
         <div style="flex:1;overflow-y:auto">
           <div class="timeline" id="act-timeline">
@@ -1329,7 +1358,7 @@ async function init() {
     });
   }
   await Promise.all([loadStats(), loadEmpresas(), loadFilterMeta(),
-                     loadActividadesRecientes()]);
+                     loadActividadesRecientes(), loadTareasPendientes()]);
   pollearWatcher();
   setInterval(pollearWatcher, 30000);
 }
@@ -2000,8 +2029,25 @@ async function agregarActividad() {
                        {tipo, texto, usuario:"usuario"});
   if (!r.ok) { toast(r.error||"Error","err"); return; }
   textoEl.value = "";
+
+  const recordarChk = document.getElementById("act-recordar-chk");
+  const recordarFecha = document.getElementById("act-recordar-fecha").value;
+  if (recordarChk.checked && recordarFecha) {
+    const rt = await POST(`/api/empresas/${S.selEmpresa.id}/tareas`,
+                          {descripcion: texto, fecha_vencimiento: recordarFecha, tipo: "seguimiento"});
+    if (rt.ok) {
+      toast("Actividad guardada + recordatorio creado");
+      recordarChk.checked = false;
+      document.getElementById("act-recordar-fecha").value = "";
+      document.getElementById("act-recordar-fecha").disabled = true;
+      await loadTareasPendientes();
+    } else {
+      toast("Actividad guardada (el recordatorio falló: " + (rt.error||"error") + ")", "err");
+    }
+  } else {
+    toast("Actividad guardada");
+  }
   await Promise.all([loadActividades(), loadActividadesRecientes()]);
-  toast("Actividad guardada");
 }
 
 async function editarActividad(aid) {
@@ -2043,6 +2089,38 @@ async function loadActividadesRecientes() {
           <div>${iconActividad(a.tipo)} ${esc((a.texto||"").slice(0,60))}</div>
         </div>`).join("")
     : '<div style="font-size:10px;color:var(--muted);padding:4px 8px">Sin actividad reciente</div>';
+}
+
+// ── Próximos seguimientos (recordatorios) ────────────────────────────────────
+async function loadTareasPendientes() {
+  const box = document.getElementById("tareas-pendientes");
+  const r = await GET("/api/tareas?estado=pendiente&horizonte_dias=14");
+  if (!r.ok) {
+    box.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:4px 8px">Sin recordatorios</div>';
+    return;
+  }
+  const rows = r.data || [];
+  if (!rows.length) {
+    box.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:4px 8px">Nada pendiente en los próximos 14 días ✓</div>';
+    return;
+  }
+  const hoy = new Date().toISOString().slice(0,10);
+  box.innerHTML = rows.map(t => {
+    const vencida = t.fecha_vencimiento < hoy;
+    const cls = vencida ? "tarea-vencida" : (t.fecha_vencimiento === hoy ? "tarea-proxima" : "");
+    return `<div class="tarea-item ${cls}" title="${esc(t.descripcion||"")}">
+      <span class="tarea-check" onclick="completarTarea(${t.id})" title="Marcar como hecho">☐</span>
+      <span class="tarea-empresa" onclick="selectEmpresa(${t.empresa_id});switchTab('actividad')">${esc(t.empresa_nombre)}</span>
+      <span>${esc(t.fecha_vencimiento.slice(5))}</span>
+    </div>`;
+  }).join("");
+}
+
+async function completarTarea(tid) {
+  const r = await PUT(`/api/tareas/${tid}`, {estado: "completada"});
+  if (!r.ok) { toast(r.error||"Error","err"); return; }
+  toast("Recordatorio completado");
+  await loadTareasPendientes();
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────

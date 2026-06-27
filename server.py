@@ -1893,6 +1893,56 @@ def post_watcher_marcar_vistos():
     return ok()
 
 
+# ── Recordatorios de seguimiento ──────────────────────────────────────────────
+@app.route("/api/tareas")
+def get_tareas():
+    estado = request.args.get("estado", "pendiente")
+    horizonte = request.args.get("horizonte_dias")
+    horizonte = to_int(horizonte, None) if horizonte else None
+    return ok(db.obtener_tareas(estado=estado or None, horizonte_dias=horizonte))
+
+@app.route("/api/empresas/<int:eid>/tareas", methods=["POST"])
+def post_tarea(eid):
+    if not db.obtener_empresa_por_id(eid):
+        return err("Empresa no encontrada", 404)
+    b = request.json or {}
+    descripcion = clean(b.get("descripcion"))
+    fecha_vencimiento = clean(b.get("fecha_vencimiento"))
+    if not fecha_vencimiento:
+        return err("Falta la fecha de vencimiento")
+    tid = db.crear_tarea(
+        eid, descripcion, fecha_vencimiento,
+        tipo=clean(b.get("tipo")) or "seguimiento",
+        cotizacion_id=to_int(b.get("cotizacion_id"), 0, lo=0) or None)
+    if not tid:
+        return err("No se pudo crear el recordatorio")
+    return ok({"id": tid}), 201
+
+@app.route("/api/empresas/<int:eid>/tareas")
+def get_tareas_empresa(eid):
+    return ok(db.obtener_tareas_empresa(eid))
+
+@app.route("/api/tareas/<int:tid>", methods=["PUT"])
+def put_tarea(tid):
+    b = request.json or {}
+    estado = b.get("estado")
+    if estado == "completada":
+        ok2 = db.completar_tarea(tid)
+    elif estado == "cancelada":
+        ok2 = db.cancelar_tarea(tid)
+    else:
+        return err("estado debe ser 'completada' o 'cancelada'")
+    if not ok2:
+        return err("No se pudo actualizar el recordatorio")
+    return ok()
+
+@app.route("/api/tareas/<int:tid>", methods=["DELETE"])
+def delete_tarea(tid):
+    if not db.eliminar_tarea(tid):
+        return err("No se pudo eliminar el recordatorio")
+    return ok()
+
+
 # ── Sprint E: trazabilidad de extracción por campo ────────────────────────────
 @app.route("/api/cotizaciones/<int:cid>/extraccion")
 def get_extraccion_campos(cid):

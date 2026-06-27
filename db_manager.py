@@ -249,7 +249,19 @@ class DBManager:
                         empresa_nombre TEXT,
                         estado TEXT NOT NULL,
                         motivo TEXT,
-                        visto INTEGER DEFAULT 0)'''
+                        visto INTEGER DEFAULT 0)''',
+                    '''CREATE TABLE IF NOT EXISTS tareas (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        empresa_id INTEGER NOT NULL,
+                        cotizacion_id INTEGER,
+                        tipo TEXT DEFAULT 'seguimiento',
+                        descripcion TEXT,
+                        fecha_vencimiento TEXT NOT NULL,
+                        estado TEXT NOT NULL DEFAULT 'pendiente',
+                        fecha_creacion TEXT DEFAULT CURRENT_TIMESTAMP,
+                        fecha_completada TEXT,
+                        FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE CASCADE,
+                        FOREIGN KEY (cotizacion_id) REFERENCES cotizaciones (id) ON DELETE SET NULL)'''
                 ]
                 for tabla in tablas:
                     c.execute(tabla)
@@ -257,6 +269,8 @@ class DBManager:
                 c.execute("CREATE INDEX IF NOT EXISTS idx_import_items_hash ON import_items(file_hash)")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_extraccion_campos_cot ON extraccion_campos(cotizacion_id)")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_watcher_eventos_visto ON watcher_eventos(visto)")
+                c.execute("CREATE INDEX IF NOT EXISTS idx_tareas_estado_venc ON tareas(estado, fecha_vencimiento)")
+                c.execute("CREATE INDEX IF NOT EXISTS idx_tareas_empresa ON tareas(empresa_id)")
                     
                 # Migración para añadir columna de país a contactos si no existe
                 c.execute("PRAGMA table_info(contactos)")
@@ -1252,6 +1266,60 @@ class DBManager:
 
     def marcar_eventos_watcher_vistos(self) -> bool:
         return self.ejecutar("UPDATE watcher_eventos SET visto=1 WHERE visto=0")
+
+    # ── Recordatorios de seguimiento (tareas) ──────────────────────────────────
+
+    def crear_tarea(self, empresa_id: int, descripcion: str, fecha_vencimiento: str,
+                    tipo: str = "seguimiento", cotizacion_id: int = None) -> int | None:
+        try:
+            with self._get_connection() as conn:
+                cur = conn.execute("""
+                    INSERT INTO tareas (empresa_id, cotizacion_id, tipo, descripcion, fecha_vencimiento)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (empresa_id, cotizacion_id, tipo, descripcion, fecha_vencimiento))
+                conn.commit()
+                return cur.lastrowid
+        except sqlite3.IntegrityError as e:
+            logging.error(f"Violación de integridad al crear tarea (empresa={empresa_id}): {e}")
+            return None
+        except Exception as e:
+            logging.error(f"Error al crear tarea (empresa={empresa_id}): {e}")
+            return None
+
+    def obtener_tareas(self, estado: str = "pendiente", horizonte_dias: int = None) -> list:
+        """Tareas con el nombre de empresa ya resuelto (para no tener que
+        hacer un segundo fetch por cada una en la UI). Ordenadas por fecha
+        de vencimiento ascendente (las más urgentes primero)."""
+        query = """
+            SELECT t.*, e.nombre as empresa_nombre
+            FROM tareas t JOIN empresas e ON e.id = t.empresa_id
+            WHERE 1=1
+        """
+        params = []
+        if estado:
+            query += " AND t.estado=?"
+            params.append(estado)
+        if horizonte_dias is not None:
+            query += " AND date(t.fecha_vencimiento) <= date('now', ?)"
+            params.append(f"+{horizonte_dias} days")
+        query += " ORDER BY t.fecha_vencimiento ASC"
+        return self.fetchall(query, tuple(params))
+
+    def obtener_tareas_empresa(self, empresa_id: int) -> list:
+        return self.fetchall(
+            "SELECT * FROM tareas WHERE empresa_id=? ORDER BY fecha_vencimiento ASC",
+            (empresa_id,))
+
+    def completar_tarea(self, tarea_id: int) -> bool:
+        return self.ejecutar(
+            "UPDATE tareas SET estado='completada', fecha_completada=CURRENT_TIMESTAMP WHERE id=?",
+            (tarea_id,))
+
+    def cancelar_tarea(self, tarea_id: int) -> bool:
+        return self.ejecutar("UPDATE tareas SET estado='cancelada' WHERE id=?", (tarea_id,))
+
+    def eliminar_tarea(self, tarea_id: int) -> bool:
+        return self.ejecutar("DELETE FROM tareas WHERE id=?", (tarea_id,))
 
     def editar_cotizacion(self, cotizacion_id: int, descripcion: str,
                           monto: float, tipo: str = None,

@@ -22,7 +22,7 @@ Grupos:
  19. Stress — volumen extremo
 """
 
-import sys, os, sqlite3, unittest, threading, time, random, string, json
+import sys, os, sqlite3, unittest, threading, time, random, string, json, datetime
 import tempfile, shutil, csv
 from unittest.mock import patch
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -6744,6 +6744,136 @@ class TestWatcherHandler(unittest.TestCase):
             observer.stop()
             handler.detener()
             observer.join(timeout=2)
+
+
+
+
+# =====================================================================
+# Recordatorios de seguimiento (tareas) — feature copiada del patrón
+# "Activities" de Odoo / "Next Action" de OnePageCRM
+# =====================================================================
+class TestTareasSeguimiento(unittest.TestCase):
+    def setUp(self):
+        import sys; sys.path.insert(0, BASE_DIR)
+        from server import app as _app, db as _db
+        _app.config['TESTING'] = True
+        self.client = _app.test_client()
+        self.db = _db
+        self.creadas = []
+
+        self.db.agregar_empresa("ClienteTareasTest", "", "", "", "", "", "")
+        self.creadas.append("ClienteTareasTest")
+        self.empresa_id = self.db.fetchone(
+            "SELECT id FROM empresas WHERE nombre='ClienteTareasTest'")["id"]
+
+    def tearDown(self):
+        for nombre in self.creadas:
+            row = self.db.fetchone("SELECT id FROM empresas WHERE nombre=?", (nombre,))
+            if row:
+                self.db.eliminar_empresa(row["id"])
+
+    def _fecha(self, dias_desde_hoy):
+        return (datetime.date.today() + datetime.timedelta(days=dias_desde_hoy)).isoformat()
+
+    def test_crear_tarea_y_listar_pendientes(self):
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "Llamar", "fecha_vencimiento": self._fecha(3)})
+        self.assertEqual(r.status_code, 201)
+        tid = r.get_json()["data"]["id"]
+
+        r2 = self.client.get("/api/tareas?estado=pendiente")
+        self.assertEqual(r2.status_code, 200)
+        ids = [t["id"] for t in r2.get_json()["data"]]
+        self.assertIn(tid, ids)
+
+    def test_horizonte_dias_filtra_correctamente(self):
+        self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                         json={"descripcion": "Cerca", "fecha_vencimiento": self._fecha(3)})
+        self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                         json={"descripcion": "Lejos", "fecha_vencimiento": self._fecha(60)})
+
+        r = self.client.get("/api/tareas?estado=pendiente&horizonte_dias=7")
+        descripciones = [t["descripcion"] for t in r.get_json()["data"]]
+        self.assertIn("Cerca", descripciones)
+        self.assertNotIn("Lejos", descripciones)
+
+    def test_tarea_vencida_se_sigue_listando_como_pendiente(self):
+        """Una tarea con fecha pasada y sin completar debe seguir
+        apareciendo (vencida), no desaparecer silenciosamente."""
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "Atrasada", "fecha_vencimiento": self._fecha(-5)})
+        tid = r.get_json()["data"]["id"]
+        r2 = self.client.get("/api/tareas?estado=pendiente&horizonte_dias=14")
+        ids = [t["id"] for t in r2.get_json()["data"]]
+        self.assertIn(tid, ids)
+
+    def test_completar_tarea_la_saca_de_pendientes(self):
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "Tarea X", "fecha_vencimiento": self._fecha(1)})
+        tid = r.get_json()["data"]["id"]
+
+        r2 = self.client.put(f"/api/tareas/{tid}", json={"estado": "completada"})
+        self.assertEqual(r2.status_code, 200)
+
+        r3 = self.client.get("/api/tareas?estado=pendiente")
+        ids = [t["id"] for t in r3.get_json()["data"]]
+        self.assertNotIn(tid, ids)
+
+        tarea = self.db.fetchone("SELECT * FROM tareas WHERE id=?", (tid,))
+        self.assertEqual(tarea["estado"], "completada")
+        self.assertIsNotNone(tarea["fecha_completada"])
+
+    def test_cancelar_tarea_la_saca_de_pendientes(self):
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "Tarea Y", "fecha_vencimiento": self._fecha(1)})
+        tid = r.get_json()["data"]["id"]
+        self.client.put(f"/api/tareas/{tid}", json={"estado": "cancelada"})
+        r2 = self.client.get("/api/tareas?estado=pendiente")
+        ids = [t["id"] for t in r2.get_json()["data"]]
+        self.assertNotIn(tid, ids)
+
+    def test_eliminar_empresa_elimina_sus_tareas(self):
+        """ON DELETE CASCADE — no debe quedar una tarea huérfana sin
+        empresa (a diferencia de import_items, donde SÍ queremos que
+        sobreviva como historial; acá no tiene sentido un recordatorio
+        para una empresa que ya no existe)."""
+        self.db.agregar_empresa("ClienteTareasBorrar", "", "", "", "", "", "")
+        emp = self.db.fetchone("SELECT id FROM empresas WHERE nombre='ClienteTareasBorrar'")
+        tid = self.db.crear_tarea(emp["id"], "Tarea huérfana", self._fecha(1))
+        self.assertIsNotNone(tid)
+
+        self.db.eliminar_empresa(emp["id"])
+        tarea = self.db.fetchone("SELECT * FROM tareas WHERE id=?", (tid,))
+        self.assertIsNone(tarea)
+
+    def test_falta_fecha_vencimiento_rechazado(self):
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "Sin fecha"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_empresa_inexistente_rechazada(self):
+        r = self.client.post("/api/empresas/999999/tareas",
+                             json={"descripcion": "x", "fecha_vencimiento": self._fecha(1)})
+        self.assertEqual(r.status_code, 404)
+
+    def test_estado_invalido_en_put_rechazado(self):
+        r = self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                             json={"descripcion": "Z", "fecha_vencimiento": self._fecha(1)})
+        tid = r.get_json()["data"]["id"]
+        r2 = self.client.put(f"/api/tareas/{tid}", json={"estado": "no_existe"})
+        self.assertEqual(r2.status_code, 400)
+
+    def test_orden_por_fecha_vencimiento_ascendente(self):
+        self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                         json={"descripcion": "Tercera", "fecha_vencimiento": self._fecha(10)})
+        self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                         json={"descripcion": "Primera", "fecha_vencimiento": self._fecha(1)})
+        self.client.post(f"/api/empresas/{self.empresa_id}/tareas",
+                         json={"descripcion": "Segunda", "fecha_vencimiento": self._fecha(5)})
+
+        r = self.client.get("/api/tareas?estado=pendiente&horizonte_dias=30")
+        descripciones = [t["descripcion"] for t in r.get_json()["data"]]
+        self.assertEqual(descripciones, ["Primera", "Segunda", "Tercera"])
 
 
 if __name__ == "__main__":
