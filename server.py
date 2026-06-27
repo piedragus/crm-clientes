@@ -348,6 +348,19 @@ def put_empresa(eid):
 
 @app.route("/api/empresas/<int:eid>", methods=["DELETE"])
 def delete_empresa(eid):
+    # Issue del peer review de PR #37: si la empresa tiene recordatorios
+    # de seguimiento pendientes, avisar antes de borrar en cascada (los
+    # recordatorios de una empresa borrada no tienen ningún valor — ver
+    # ON DELETE CASCADE en tareas.empresa_id — pero el usuario debería
+    # poder decidir con esa información, no perderlos en silencio).
+    pendientes = db.fetchone(
+        "SELECT COUNT(*) as n FROM tareas WHERE empresa_id=? AND estado='pendiente'",
+        (eid,))
+    n_pendientes = pendientes["n"] if pendientes else 0
+    if n_pendientes and not request.args.get("confirmar"):
+        return err(f"Esta empresa tiene {n_pendientes} recordatorio(s) de seguimiento "
+                  f"pendiente(s). Se van a perder si la borrás. Reintentá con "
+                  f"?confirmar=1 para confirmar.", 409)
     db.eliminar_empresa(eid)
     return ok()
 
@@ -1890,6 +1903,59 @@ def get_watcher_eventos():
 def post_watcher_marcar_vistos():
     if not db.marcar_eventos_watcher_vistos():
         return err("No se pudo marcar como vistos")
+    return ok()
+
+
+# ── Recordatorios de seguimiento ──────────────────────────────────────────────
+TIPOS_TAREA_VALIDOS = {"seguimiento", "llamada", "mail", "reunion"}
+ESTADOS_TAREA_VALIDOS = {"completada", "cancelada"}
+@app.route("/api/tareas")
+def get_tareas():
+    estado = request.args.get("estado", "pendiente")
+    horizonte = request.args.get("horizonte_dias")
+    horizonte = to_int(horizonte, None) if horizonte else None
+    return ok(db.obtener_tareas(estado=estado or None, horizonte_dias=horizonte))
+
+@app.route("/api/empresas/<int:eid>/tareas", methods=["POST"])
+def post_tarea(eid):
+    if not db.obtener_empresa_por_id(eid):
+        return err("Empresa no encontrada", 404)
+    b = request.json or {}
+    descripcion = clean(b.get("descripcion"))
+    fecha_vencimiento = clean(b.get("fecha_vencimiento"))
+    if not fecha_vencimiento:
+        return err("Falta la fecha de vencimiento")
+    tipo_in = (clean(b.get("tipo")) or "").strip().lower()
+    tipo = tipo_in if tipo_in in TIPOS_TAREA_VALIDOS else "seguimiento"
+    tid = db.crear_tarea(
+        eid, descripcion, fecha_vencimiento, tipo=tipo,
+        cotizacion_id=to_int(b.get("cotizacion_id"), 0, lo=0) or None)
+    if not tid:
+        return err("No se pudo crear el recordatorio")
+    return ok({"id": tid}), 201
+
+@app.route("/api/empresas/<int:eid>/tareas")
+def get_tareas_empresa(eid):
+    return ok(db.obtener_tareas_empresa(eid))
+
+@app.route("/api/tareas/<int:tid>", methods=["PUT"])
+def put_tarea(tid):
+    b = request.json or {}
+    estado = b.get("estado")
+    if estado == "completada":
+        ok2 = db.completar_tarea(tid)
+    elif estado == "cancelada":
+        ok2 = db.cancelar_tarea(tid)
+    else:
+        return err("estado debe ser 'completada' o 'cancelada'")
+    if not ok2:
+        return err("No se pudo actualizar el recordatorio")
+    return ok()
+
+@app.route("/api/tareas/<int:tid>", methods=["DELETE"])
+def delete_tarea(tid):
+    if not db.eliminar_tarea(tid):
+        return err("No se pudo eliminar el recordatorio")
     return ok()
 
 
