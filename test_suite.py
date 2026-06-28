@@ -6259,6 +6259,32 @@ class TestExtraccionDeterministica(unittest.TestCase):
         r = extraer_campos_deterministicos("Total $ 15000")
         self.assertEqual(r["monto"][0], 15000.0)
 
+    def test_validez_se_detecta_en_frases_tipicas(self):
+        from extraccion.campos import extraer_campos_deterministicos
+        casos = [
+            ("Validez: 15 días", 15),
+            ("Oferta válida por 30 días", 30),
+            ("Vigencia de la oferta: 10 días corridos", 10),
+            ("La presente cotización tiene una validez de 7 días", 7),
+            ("PRESUPUESTO valido 10 dias", 10),
+        ]
+        for texto, esperado in casos:
+            r = extraer_campos_deterministicos(texto)
+            self.assertIn("validez_dias", r, f"no detectó validez en: {texto!r}")
+            self.assertEqual(r["validez_dias"][0], esperado, f"en: {texto!r}")
+
+    def test_validez_no_confunde_garantia_con_validez(self):
+        """'Garantía de 730 días' no es lo mismo que la validez de la
+        oferta — no debe matchear como si lo fuera."""
+        from extraccion.campos import extraer_campos_deterministicos
+        r = extraer_campos_deterministicos("Garantía de 730 días sobre repuestos")
+        self.assertNotIn("validez_dias", r)
+
+    def test_validez_sin_mencion_no_inventa_valor(self):
+        from extraccion.campos import extraer_campos_deterministicos
+        r = extraer_campos_deterministicos("Documento sin ninguna mención de plazo")
+        self.assertNotIn("validez_dias", r)
+
 
 class TestExtraccionTrazabilidad(unittest.TestCase):
     """Tests de integración del pipeline completo (issue Sprint E,
@@ -6348,6 +6374,28 @@ class TestExtraccionTrazabilidad(unittest.TestCase):
         self.assertIsNotNone(por_campo["monto"]["confianza"])
         self.assertIn("fecha_doc", por_campo)
         self.assertEqual(por_campo["fecha_doc"]["fuente"], "texto_directo")
+
+    def test_validez_dias_se_extrae_y_calcula_vencimiento(self):
+        self._correr_pipeline("Cotización\nTotal: USD 1,500.00\nValidez: 15 días")
+        row = self.db.get_cotizacion_por_id(self.cotizacion_id)
+        self.assertEqual(row["validez_dias"], 15)
+
+        r = self.client.get(f"/api/cotizaciones/{self.cotizacion_id}")
+        d = r.get_json()["data"]
+        self.assertIsNotNone(d["fecha_vencimiento"])
+        self.assertIn("vencida", d)
+
+    def test_correccion_manual_de_validez_se_refleja_en_legacy(self):
+        """La corrección manual de validez_dias debe reflejarse en la
+        columna legacy (igual que ya pasa con monto/moneda), no solo
+        quedar en extraccion_campos."""
+        self._correr_pipeline("Documento sin mención de validez")
+        r = self.client.patch(
+            f"/api/cotizaciones/{self.cotizacion_id}/extraccion/validez_dias",
+            json={"valor": 30})
+        self.assertEqual(r.status_code, 200)
+        row = self.db.get_cotizacion_por_id(self.cotizacion_id)
+        self.assertEqual(row["validez_dias"], 30)
 
     def test_parser_tolera_texto_incompleto_en_pipeline_completo(self):
         """El pipeline completo (no solo la capa determinística aislada)

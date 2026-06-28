@@ -1784,9 +1784,11 @@ function renderCotizaciones() {
     const monto = parseFloat(c.monto||0).toLocaleString("es-AR",{minimumFractionDigits:2});
     const alerta = c.pendientes_extraccion > 0
       ? ` <span title="${c.pendientes_extraccion} campo(s) por revisar" style="color:var(--warn)">⚠</span>` : "";
+    const vencAlerta = c.vencida
+      ? ` <span title="Cotización vencida (venció el ${esc(c.fecha_vencimiento||"")})" style="color:var(--danger)">⏰</span>` : "";
     return `<tr onclick="selCot(${i})" ondblclick="abrirArchivoCot(${i})">
       <td>${esc(c.fecha_fmt||"")}</td>
-      <td>${esc(arch)}${alerta}</td>
+      <td>${esc(arch)}${alerta}${vencAlerta}</td>
       <td>${esc(tipo)}</td>
       <td>${esc(c.estado_ia||"")}</td>
       <td style="text-align:right">${esc(c.moneda||"$")}${monto}</td>
@@ -1811,8 +1813,14 @@ function selCot(i, evt) {
   }
   let estado = c.estado_ia ? `[${c.estado_ia}] ` : "";
   let error = c.error_ia ? ` Error: ${c.error_ia}` : "";
+  let validez_txt = "";
+  if (c.fecha_vencimiento) {
+    validez_txt = c.vencida
+      ? ` — ⏰ VENCIDA (venció el ${c.fecha_vencimiento})`
+      : ` — válida hasta ${c.fecha_vencimiento}`;
+  }
   document.getElementById("cot-resumen-txt").textContent =
-    c.resumen ? (estado + monto_txt + c.resumen + badge) : (estado + (error || "—"));
+    c.resumen ? (estado + monto_txt + c.resumen + badge + validez_txt) : (estado + (error || "—") + validez_txt);
   loadExtraccionPanel(c.id);
 }
 
@@ -1826,8 +1834,9 @@ async function loadExtraccionPanel(cotId) {
 
   const NOMBRES = {monto: "Monto", moneda: "Moneda", fecha_doc: "Fecha del documento",
     numero_documento: "N° de documento", cliente_detectado: "Cliente",
-    pais_detectado: "País", proveedor: "Proveedor", tipo: "Tipo"};
-  const TIPOS_INPUT = {monto: "number", fecha_doc: "date"};
+    pais_detectado: "País", proveedor: "Proveedor", tipo: "Tipo",
+    validez_dias: "Validez (días)"};
+  const TIPOS_INPUT = {monto: "number", fecha_doc: "date", validez_dias: "number"};
   // Para type="date" el input HTML5 necesita yyyy-mm-dd exacto (ya es el
   // formato que devuelve la capa de extracción, pero por las dudas si
   // alguna vez llega vacío/inválido, no forzamos el tipo y dejamos texto.

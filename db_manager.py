@@ -390,6 +390,8 @@ class DBManager:
                     c.execute("ALTER TABLE cotizaciones ADD COLUMN archivo_hash TEXT")
                 if 'fecha_importacion' not in final_cols:
                     c.execute("ALTER TABLE cotizaciones ADD COLUMN fecha_importacion TEXT")
+                if 'validez_dias' not in final_cols:
+                    c.execute("ALTER TABLE cotizaciones ADD COLUMN validez_dias INTEGER")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_cotizaciones_archivo_hash ON cotizaciones(archivo_hash)")
                 c.execute("UPDATE cotizaciones SET estado_ia='sin_archivo' WHERE (estado_ia IS NULL OR estado_ia='') AND (ruta_archivo IS NULL OR ruta_archivo='')")
                 c.execute("UPDATE cotizaciones SET estado_ia='pendiente' WHERE (estado_ia IS NULL OR estado_ia='') AND ruta_archivo IS NOT NULL AND ruta_archivo!=''")
@@ -1371,7 +1373,8 @@ class DBManager:
                                                resumen: str = "",
                                                monto=None, moneda=None,
                                                proveedor_ia: str = "none",
-                                               tipo: str = None) -> bool:
+                                               tipo: str = None,
+                                               validez_dias: int = None) -> bool:
         """
         Actualiza campos IA de una cotización importada por ruta.
         Thread-safe: solo modifica columnas existentes para tolerar bases antiguas.
@@ -1403,6 +1406,13 @@ class DBManager:
                         monto_f = None
                     if monto_f is not None and monto_f > 0:
                         sets.append('monto=?'); vals.append(monto_f)
+                if 'validez_dias' in columns and validez_dias is not None:
+                    try:
+                        validez_i = int(validez_dias)
+                    except Exception:
+                        validez_i = None
+                    if validez_i is not None and validez_i > 0:
+                        sets.append('validez_dias=?'); vals.append(validez_i)
                 if not sets:
                     return False
                 vals.extend([empresa_id, ruta])

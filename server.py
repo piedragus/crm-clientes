@@ -195,6 +195,12 @@ def ejecutar_resumen_bg(cotizacion_id):
 
         monto_final  = _valor_final("monto",  data.get("monto"))
         moneda_final = _valor_final("moneda", data.get("moneda"))
+        # validez_dias no lo sabe ningún LLM (resumidor.py no lo pide en su
+        # prompt — no se tocó esa integración externa en esta sesión, sin
+        # forma de probarla en vivo sin API keys reales). Solo capa
+        # determinística: si no hay regex que la encuentre con confianza
+        # suficiente, queda 'pendiente_revision' como cualquier otro campo.
+        validez_final = _valor_final("validez_dias", None)
 
         ok2   = db.actualizar_resumen_cotizacion_por_ruta(
             row["empresa_id"], ruta,
@@ -202,7 +208,8 @@ def ejecutar_resumen_bg(cotizacion_id):
             monto=monto_final,
             moneda=moneda_final,
             proveedor_ia=data.get("proveedor_ia","none"),
-            tipo=data.get("tipo"))
+            tipo=data.get("tipo"),
+            validez_dias=validez_final)
         if not ok2:
             db.set_estado_ia_cotizacion(cotizacion_id, "error", "No se pudo guardar")
     except Exception as exc:
@@ -413,13 +420,34 @@ def get_cotizaciones(eid):
         for d in result:
             d["fecha_fmt"] = formatear_fecha(d.get("fecha",""))
             d["pendientes_extraccion"] = pendientes.get(d["id"], 0)
+            _agregar_vencimiento(d)
     return ok(result)
+
+def _agregar_vencimiento(data: dict) -> None:
+    """Calcula fecha_vencimiento = fecha + validez_dias y si ya venció,
+    sin mutar nada en la DB (es un dato derivado, no se guarda — si
+    cambia la fecha base o la validez, se recalcula solo en la próxima
+    lectura, no hay riesgo de quedar desincronizado)."""
+    if not data.get("validez_dias") or not data.get("fecha"):
+        data["fecha_vencimiento"] = None
+        data["vencida"] = False
+        return
+    try:
+        fecha_base = datetime.strptime(data["fecha"][:10], "%Y-%m-%d")
+        vencimiento = fecha_base + timedelta(days=int(data["validez_dias"]))
+        data["fecha_vencimiento"] = vencimiento.strftime("%Y-%m-%d")
+        data["vencida"] = vencimiento.date() < datetime.now().date()
+    except (ValueError, TypeError):
+        data["fecha_vencimiento"] = None
+        data["vencida"] = False
+
 
 @app.route("/api/cotizaciones/<int:cid>")
 def get_cotizacion(cid):
     r = db.get_cotizacion_por_id(cid)
     if not r: return err("No encontrada", 404)
     data = dict(r)
+    _agregar_vencimiento(data)
     # Sprint E (review PR #28): adjuntar candidatos de baja confianza sin
     # tocar los campos legacy (monto/moneda siguen viniendo de la tabla
     # 'cotizaciones', vacíos si no hay confianza suficiente). Así un
@@ -1984,9 +2012,10 @@ def patch_extraccion_campo(cid, campo):
         return err("Falta 'valor'")
     if not db.corregir_campo_manual(cid, campo, b["valor"]):
         return err("No se pudo guardar la corrección")
-    # Si el campo corregido es monto o moneda, reflejarlo también en la
-    # columna legacy de cotizaciones (que es la que lee el resto de la UI).
-    if campo in ("monto", "moneda"):
+    # Si el campo corregido es monto, moneda o validez_dias, reflejarlo
+    # también en la columna legacy de cotizaciones (que es la que lee el
+    # resto de la UI).
+    if campo in ("monto", "moneda", "validez_dias"):
         row = db.get_cotizacion_por_id(cid)
         db.actualizar_resumen_cotizacion_por_ruta(
             row["empresa_id"], row["ruta_archivo"],
@@ -1994,7 +2023,8 @@ def patch_extraccion_campo(cid, campo):
             monto=to_float(b["valor"]) if campo == "monto" else row.get("monto"),
             moneda=b["valor"] if campo == "moneda" else row.get("moneda"),
             proveedor_ia=row.get("proveedor_ia","none"),
-            tipo=row.get("tipo"))
+            tipo=row.get("tipo"),
+            validez_dias=to_int(b["valor"], None) if campo == "validez_dias" else row.get("validez_dias"))
     return ok(db.obtener_campo_extraido(cid, campo))
 
 

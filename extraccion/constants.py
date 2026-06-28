@@ -3,6 +3,7 @@
 CAMPOS_VALIDOS = {
     "monto", "moneda", "fecha_doc", "numero_documento",
     "cliente_detectado", "pais_detectado", "proveedor", "tipo",
+    "validez_dias",
 }
 
 FUENTES_VALIDAS = {
