@@ -125,6 +125,31 @@ def _detectar_fecha(texto: str) -> tuple[str, float] | None:
         return None
 
 
+# Frases típicas de cotizaciones industriales en español para la
+# validez de la oferta. El número de días siempre aparece DESPUÉS de
+# la palabra clave en estas variantes ("Validez: 15 días", "Oferta
+# válida por 30 días", "Vigencia de la oferta: 10 días corridos").
+_VALIDEZ_RE = re.compile(
+    r"\b(?:validez|vigencia|v[aá]lid[oa])\b"
+    r"[^\d\n]{0,45}?"          # conector flexible: "de la oferta:", "de", ": ", "por ", etc.
+    r"(\d{1,3})\s*d[ií]as?",
+    re.IGNORECASE)
+
+
+def _detectar_validez_dias(texto: str) -> tuple[int, float] | None:
+    m = _VALIDEZ_RE.search(texto)
+    if not m:
+        return None
+    try:
+        dias = int(m.group(1))
+        if 1 <= dias <= 365:  # fuera de ese rango, más probable que sea
+                              # otra cosa (ej. "garantía de 730 días")
+            return dias, 0.85
+    except ValueError:
+        pass
+    return None
+
+
 def extraer_campos_deterministicos(texto: str) -> dict:
     """
     Recibe el texto crudo extraído de un archivo y devuelve un dict
@@ -152,5 +177,9 @@ def extraer_campos_deterministicos(texto: str) -> dict:
     fecha = _detectar_fecha(texto)
     if fecha:
         resultado["fecha_doc"] = fecha
+
+    validez = _detectar_validez_dias(texto)
+    if validez:
+        resultado["validez_dias"] = validez
 
     return resultado
