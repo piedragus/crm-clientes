@@ -3190,6 +3190,8 @@ async function showLimpieza() {
   openModal("limpiar-modal");
 }
 
+let _limpiarGroups = [];
+
 async function loadLimpieza() {
   const umbral = document.getElementById("limpiar-umbral").value || 85;
   document.getElementById("limpiar-status").textContent = "Analizando…";
@@ -3200,7 +3202,7 @@ async function loadLimpieza() {
   if (!r.ok) { toast(r.error||"Error","err"); return; }
 
   const groups = r.data || [];
-  window._limpiarGroups = groups;   // fuente de verdad para limpiarPlanGrupo(); evita leer del DOM
+  _limpiarGroups = groups;   // fuente de verdad para limpiarPlanGrupo(); evita leer del DOM y evita window
   document.getElementById("limpiar-count").textContent =
     `${groups.length} grupo(s) detectado(s)`;
   document.getElementById("limpiar-status").textContent = "";
@@ -3286,7 +3288,7 @@ function setLimpiarMerging(on) {
 function limpiarPlanGrupo(gi) {
   // Lee del array que devolvió el server (window._limpiarGroups), NO del DOM:
   // el DOM es solo presentación, la data real vive en la variable JS.
-  const g = (window._limpiarGroups || [])[gi];
+  const g = (_limpiarGroups || [])[gi];
   const sel      = document.getElementById(`canonical-${gi}`);
   const renameEl = document.getElementById(`rename-${gi}`);
   if (!g || !sel) return null;
