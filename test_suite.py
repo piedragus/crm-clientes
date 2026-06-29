@@ -2027,6 +2027,87 @@ class TestResumidor(unittest.TestCase):
         r = _parse_response(raw)
         self.assertLessEqual(len(r["resumen"]), 300)
 
+    # ── Cadena de fallback Gemini -> Grok -> defaults (peer review intensivo) ──
+    # Los tests existentes de este archivo cubren _parse_response en
+    # aislamiento (markdown fences, monto con símbolo, JSON inválido) y
+    # resumir() solo en el camino "sin ninguna API key configurada". Nunca
+    # se mockeaba una llamada real FALLANDO (timeout, error de red, JSON
+    # irrecuperable incluso con el regex fallback) para confirmar que la
+    # cadena de fallback se comporta como dice el docstring de resumir():
+    # "Nunca lanza excepciones — devuelve defaults si ambos fallan."
+
+    def _con_keys(self, gemini=True, grok=True):
+        """Context manager inline: setea/restaura env vars de API keys."""
+        import os
+        class _Ctx:
+            def __enter__(self):
+                self.viejo = {k: os.environ.get(k) for k in
+                             ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GROK_API_KEY", "XAI_API_KEY")}
+                if gemini: os.environ["GEMINI_API_KEY"] = "fake-key-gemini"
+                else: os.environ.pop("GEMINI_API_KEY", None); os.environ.pop("GOOGLE_API_KEY", None)
+                if grok: os.environ["GROK_API_KEY"] = "fake-key-grok"
+                else: os.environ.pop("GROK_API_KEY", None); os.environ.pop("XAI_API_KEY", None)
+                return self
+            def __exit__(self, *a):
+                for k, v in self.viejo.items():
+                    if v is None: os.environ.pop(k, None)
+                    else: os.environ[k] = v
+        return _Ctx()
+
+    def test_gemini_falla_cae_a_grok_exitoso(self):
+        """Gemini tira excepción (timeout/error de red simulado) -> el
+        fallback a Grok debe funcionar y devolver su resultado, no los
+        defaults — confirma que la cadena realmente intenta el segundo
+        proveedor en vez de rendirse en el primer fallo."""
+        import resumidor
+        with self._con_keys(gemini=True, grok=True):
+            with patch.object(resumidor, "_llamar_gemini",
+                              side_effect=TimeoutError("Gemini no respondió")):
+                with patch.object(resumidor, "_llamar_grok",
+                                  return_value={"resumen": "ok desde grok", "monto": 100.0,
+                                               "moneda": "USD", "tipo": "Otro",
+                                               "proveedor": None, "fecha_doc": None,
+                                               "confianza": 0.5, "proveedor_ia": "grok"}):
+                    r = resumidor.resumir("texto cualquiera")
+        self.assertEqual(r["proveedor_ia"], "grok")
+        self.assertEqual(r["resumen"], "ok desde grok")
+
+    def test_gemini_y_grok_fallan_devuelve_defaults_sin_crashear(self):
+        """Peor caso: ambos proveedores fallan (timeout, JSON irrecuperable,
+        lo que sea) — resumir() debe devolver defaults seguros, nunca
+        propagar la excepción hacia el caller (que es un thread de
+        background — una excepción sin atrapar ahí se pierde en silencio
+        y deja la cotización en estado 'procesando' para siempre)."""
+        import resumidor
+        with self._con_keys(gemini=True, grok=True):
+            with patch.object(resumidor, "_llamar_gemini",
+                              side_effect=RuntimeError("Gemini: respuesta no parseable")):
+                with patch.object(resumidor, "_llamar_grok",
+                                  side_effect=TimeoutError("Grok no respondió")):
+                    r = resumidor.resumir("texto cualquiera")
+        self.assertIsInstance(r, dict)
+        self.assertIsNone(r["monto"])
+        self.assertEqual(r["proveedor_ia"], "grok-error")
+        self.assertIn("Grok", r["resumen"])  # el mensaje de error queda visible, no se pierde
+
+    def test_gemini_devuelve_json_totalmente_irrecuperable(self):
+        """Ni siquiera el regex fallback de _parse_response puede salvar
+        una respuesta sin ningún '{...}' adentro (ej. el LLM se disculpa
+        en texto plano porque 'no puede leer el documento'). Debe
+        comportarse igual que cualquier otra excepción de Gemini: cae a
+        Grok, no crashea el pipeline."""
+        import resumidor
+        with self._con_keys(gemini=True, grok=True):
+            with patch.object(resumidor, "_llamar_gemini",
+                              side_effect=lambda texto: resumidor._parse_response(
+                                  "Lo siento, no puedo procesar este documento.")):
+                with patch.object(resumidor, "_llamar_grok",
+                                  return_value={"resumen": "grok salvó la situación", "monto": None,
+                                               "moneda": None, "tipo": "Otro", "proveedor": None,
+                                               "fecha_doc": None, "confianza": 0.0, "proveedor_ia": "grok"}):
+                    r = resumidor.resumir("texto cualquiera")
+        self.assertEqual(r["proveedor_ia"], "grok")
+
 
 # =====================================================================
 # 30. ENRIQUECEDOR — lógica pura
@@ -6730,6 +6811,92 @@ class TestWatcherHandler(unittest.TestCase):
         resultados = self._correr_observer(crear, timeout=1.5)
         self.assertEqual(len(resultados), 0,
             "un archivo en carpeta excluida no debe disparar ningún resultado")
+
+    def test_error_transitorio_se_reintenta_y_termina_importando(self):
+        """Peer review intensivo: simula un archivo bloqueado por OneDrive
+        (PermissionError) las primeras 2 veces, y disponible en el 3er
+        intento. Antes de este fix, importar_archivo() ya no se caía
+        (la excepción quedaba atrapada), pero SIN retry el archivo quedaba
+        abandonado para siempre como error — el handler solo escucha
+        on_created/on_moved, nunca on_modified, así que no hay ningún
+        evento de filesystem que dispare un segundo intento por sí solo."""
+        import watcher.watcher_handler as wh
+
+        intentos = {"n": 0}
+        resultado_real = {"estado": "importado", "empresa_id": 1,
+                          "empresa_nombre": "ClienteRetry", "cotizacion_id": 1,
+                          "motivo": None}
+
+        def importar_con_fallos_iniciales(db, path, root_path, extensions=None):
+            intentos["n"] += 1
+            if intentos["n"] <= 2:
+                return {"estado": "error", "motivo": "PermissionError: archivo en uso",
+                       "error_tipo": "PermissionError", "empresa_id": None,
+                       "empresa_nombre": None, "cotizacion_id": None}
+            return resultado_real
+
+        handler = wh.CotizacionHandler(self.db, self.tmpdir, poll_interval=0.05)
+        try:
+            with patch.object(wh, "importar_archivo", side_effect=importar_con_fallos_iniciales):
+                with patch.object(wh, "REINTENTO_BACKOFF_SECONDS", 0.1):
+                    with patch.object(wh, "DEBOUNCE_SECONDS", 0.05):
+                        path = os.path.join(self.tmpdir, "cot_bloqueada.pdf")
+                        with open(path, "w") as f:
+                            f.write("contenido dummy")
+                        handler._procesar(path)  # 1er intento -> falla, se reprograma
+                        self.assertEqual(intentos["n"], 1)
+                        self.assertIn(path, handler._pendientes)
+
+                        # Forzar que el debounce ya venció y procesar el reintento
+                        # (en producción esto lo hace _loop_worker, que borra la
+                        # entrada de _pendientes ANTES de llamar a _procesar)
+                        with handler._lock:
+                            del handler._pendientes[path]
+                        handler._procesar(path)  # 2do intento -> falla, se reprograma
+                        self.assertEqual(intentos["n"], 2)
+
+                        with handler._lock:
+                            del handler._pendientes[path]
+                        handler._procesar(path)  # 3er intento -> éxito
+                        self.assertEqual(intentos["n"], 3)
+                        self.assertNotIn(path, handler._pendientes)
+                        self.assertNotIn(path, handler._reintentos,
+                            "el contador de reintentos debe limpiarse tras un éxito")
+        finally:
+            handler.detener()
+
+    def test_error_transitorio_agota_reintentos_y_queda_como_error_definitivo(self):
+        """Si el error transitorio persiste más allá de MAX_REINTENTOS,
+        debe dejar de reintentar y registrarse como error definitivo —
+        no debe reintentar para siempre."""
+        import watcher.watcher_handler as wh
+
+        def siempre_falla(db, path, root_path, extensions=None):
+            return {"estado": "error", "motivo": "PermissionError: archivo en uso",
+                   "error_tipo": "PermissionError", "empresa_id": None,
+                   "empresa_nombre": None, "cotizacion_id": None}
+
+        resultados = []
+        handler = wh.CotizacionHandler(self.db, self.tmpdir, on_resultado=resultados.append,
+                                       poll_interval=0.05)
+        try:
+            with patch.object(wh, "importar_archivo", side_effect=siempre_falla):
+                with patch.object(wh, "MAX_REINTENTOS", 2):
+                    path = os.path.join(self.tmpdir, "cot_siempre_bloqueada.pdf")
+                    with open(path, "w") as f:
+                        f.write("contenido dummy")
+                    for _ in range(wh.MAX_REINTENTOS + 1):
+                        handler._procesar(path)
+                        with handler._lock:
+                            handler._pendientes[path] = 0  # forzar que ya venció el debounce
+
+                    handler._procesar(path)
+            self.assertEqual(len(resultados), 1,
+                "debe haber registrado el resultado final UNA sola vez, "
+                "no en cada uno de los reintentos intermedios")
+            self.assertEqual(resultados[0]["estado"], "error")
+        finally:
+            handler.detener()
 
     def test_evento_queda_registrado_en_watcher_eventos(self):
         carpeta = os.path.join(self.tmpdir, "ClienteWatcherEventos")

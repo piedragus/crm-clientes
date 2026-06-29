@@ -113,5 +113,11 @@ def importar_archivo(db, path: str, root_path: str, extensions=None) -> dict:
         return resultado
 
     except Exception as e:
-        resultado["motivo"] = str(e)
+        # Incluir el tipo de excepción (no solo str(e)) para que el caller
+        # (el watcher) pueda distinguir errores transitorios de archivo
+        # bloqueado (PermissionError/OSError — típico de OneDrive todavía
+        # sincronizando) de errores permanentes (FileNotFoundError, datos
+        # corruptos) sin tener que parsear el mensaje en español/inglés.
+        resultado["motivo"] = f"{type(e).__name__}: {e}"
+        resultado["error_tipo"] = type(e).__name__
         return resultado
