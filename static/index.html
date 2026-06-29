@@ -875,6 +875,9 @@ body{font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;
     </div>
     <div class="modal-footer">
       <span id="limpiar-count" style="color:var(--muted);font-size:11px;margin-right:auto"></span>
+      <span id="limpiar-sel-info" style="color:var(--muted);font-size:11px"></span>
+      <button id="limpiar-fusionar-sel-btn" class="btn btn-warn" style="display:none"
+              onclick="fusionarSeleccionados()">Fusionar seleccionados →</button>
       <button class="btn btn-ghost" onclick="closeModal('limpiar-modal')">Cerrar</button>
     </div>
   </div>
@@ -3200,6 +3203,7 @@ async function loadLimpieza() {
   document.getElementById("limpiar-count").textContent =
     `${groups.length} grupo(s) detectado(s)`;
   document.getElementById("limpiar-status").textContent = "";
+  updateLimpiarSelUI();
 
   if (!groups.length) {
     document.getElementById("limpiar-groups").innerHTML =
@@ -3221,8 +3225,10 @@ async function loadLimpieza() {
         <td style="padding:4px 8px;text-align:center">${m.ncon}</td>
       </tr>`).join("");
 
-    return `<div style="border-bottom:2px solid var(--border);padding:12px 16px">
+    return `<div style="border-bottom:2px solid var(--border);padding:12px 16px" data-limpiar-group="${gi}">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <input type="checkbox" class="limpiar-group-chk" id="grp-chk-${gi}"
+               onchange="updateLimpiarSelUI()" style="width:15px;height:15px;cursor:pointer">
         <span style="font-size:11px;font-weight:700;color:var(--muted)">GRUPO ${gi+1}</span>
         <label style="font-size:11px;color:var(--txt2)">Conservar nombre:</label>
         <select id="canonical-${gi}" style="font-size:11px;padding:3px 8px;
@@ -3250,28 +3256,76 @@ async function loadLimpieza() {
   }).join("");
 }
 
-async function fusionarGrupo(gi, allIds) {
+function updateLimpiarSelUI() {
+  const n = document.querySelectorAll(".limpiar-group-chk:checked").length;
+  const btn  = document.getElementById("limpiar-fusionar-sel-btn");
+  const info = document.getElementById("limpiar-sel-info");
+  if (btn)  btn.style.display  = n ? "" : "none";
+  if (info) info.textContent  = n ? `${n} grupo(s) seleccionado(s)` : "";
+}
+
+function limpiarPlanGrupo(gi) {
+  // Devuelve {destinoId, origenes, nuevoNombre, nombreDestino} para el grupo gi, sin tocar el server.
   const sel      = document.getElementById(`canonical-${gi}`);
   const renameEl = document.getElementById(`rename-${gi}`);
-  const nuevoNombre = renameEl.value.trim();
-
-  let destinoId = +sel.value;
+  if (!sel) return null;
+  const nuevoNombre = (renameEl?.value || "").trim();
+  const destinoId = +sel.value;
+  const grupoEl = document.querySelector(`[data-limpiar-group="${gi}"]`);
+  const allIds = [...grupoEl.querySelectorAll(`#canonical-${gi} option`)].map(o => +o.value);
   const origenes = allIds.filter(id => id !== destinoId);
+  return {
+    destinoId, origenes, nuevoNombre,
+    nombreDestino: sel.options[sel.selectedIndex].text.split("(")[0].trim(),
+  };
+}
 
-  if (!confirm(`¿Fusionar ${origenes.length} empresa(s) hacia "${sel.options[sel.selectedIndex].text.split("(")[0].trim()}"?`)) return;
-
-  // Rename if user typed a new name
-  if (nuevoNombre) {
+async function ejecutarFusionGrupo(plan) {
+  if (plan.nuevoNombre) {
     const r = await POST("/api/limpiar/renombrar",
-                         {empresa_id: destinoId, nombre: nuevoNombre});
-    if (!r.ok) { toast(r.error||"Error renombrando","err"); return; }
+                         {empresa_id: plan.destinoId, nombre: plan.nuevoNombre});
+    if (!r.ok) return {ok: false, error: r.error || "Error renombrando"};
+  }
+  const r = await POST("/api/limpiar/unificar",
+                       {destino_id: plan.destinoId, origen_ids: plan.origenes});
+  if (!r.ok) return {ok: false, error: r.error || "Error"};
+  return {ok: true, fusionadas: r.data.fusionadas};
+}
+
+async function fusionarGrupo(gi, allIds) {
+  const plan = limpiarPlanGrupo(gi);
+  if (!plan || !plan.origenes.length) return;
+
+  if (!confirm(`¿Fusionar ${plan.origenes.length} empresa(s) hacia "${plan.nombreDestino}"?`)) return;
+
+  const r = await ejecutarFusionGrupo(plan);
+  if (!r.ok) { toast(r.error,"err"); return; }
+
+  toast(`✓ ${r.fusionadas} empresa(s) fusionadas`);
+  await Promise.all([loadEmpresas(), loadStats()]);
+  await loadLimpieza();
+}
+
+async function fusionarSeleccionados() {
+  const checks = [...document.querySelectorAll(".limpiar-group-chk:checked")];
+  if (!checks.length) return;
+
+  const gis = checks.map(c => +c.id.replace("grp-chk-", ""));
+  const planes = gis.map(limpiarPlanGrupo).filter(p => p && p.origenes.length);
+  if (!planes.length) return;
+
+  const totalOrigenes = planes.reduce((acc, p) => acc + p.origenes.length, 0);
+
+  // Un solo confirm para todos los grupos marcados.
+  if (!confirm(`¿Fusionar ${planes.length} grupo(s) (${totalOrigenes} empresa(s) en total)?\nEsta acción no se puede deshacer.`)) return;
+
+  let fusionadas = 0, errores = 0;
+  for (const plan of planes) {
+    const r = await ejecutarFusionGrupo(plan);
+    if (r.ok) fusionadas += r.fusionadas; else errores++;
   }
 
-  const r = await POST("/api/limpiar/unificar",
-                       {destino_id: destinoId, origen_ids: origenes});
-  if (!r.ok) { toast(r.error||"Error","err"); return; }
-
-  toast(`✓ ${r.data.fusionadas} empresa(s) fusionadas`);
+  toast(`✓ ${fusionadas} empresa(s) fusionadas${errores ? ` | ${errores} grupo(s) con error` : ""}`);
   await Promise.all([loadEmpresas(), loadStats()]);
   await loadLimpieza();
 }
