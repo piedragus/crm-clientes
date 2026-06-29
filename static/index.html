@@ -3200,9 +3200,11 @@ async function loadLimpieza() {
   if (!r.ok) { toast(r.error||"Error","err"); return; }
 
   const groups = r.data || [];
+  window._limpiarGroups = groups;   // fuente de verdad para limpiarPlanGrupo(); evita leer del DOM
   document.getElementById("limpiar-count").textContent =
     `${groups.length} grupo(s) detectado(s)`;
   document.getElementById("limpiar-status").textContent = "";
+  setLimpiarMerging(false);
   updateLimpiarSelUI();
 
   if (!groups.length) {
@@ -3264,19 +3266,37 @@ function updateLimpiarSelUI() {
   if (info) info.textContent  = n ? `${n} grupo(s) seleccionado(s)` : "";
 }
 
+let _limpiarMerging = false;
+
+function setLimpiarMerging(on) {
+  _limpiarMerging = on;
+  // Bloquea toda acción de fusión/cierre/reanalizar mientras una fusión está en curso,
+  // para que nunca se dispare un re-render (loadLimpieza) a mitad de otra fusión
+  // ni se puedan lanzar dos fusiones en paralelo (doble click / cierre de modal).
+  document.querySelectorAll("#limpiar-modal .limpiar-group-chk, " +
+                             "#limpiar-modal button, " +
+                             "#limpiar-modal input")
+    .forEach(el => el.disabled = on);
+  document.querySelectorAll("#limpiar-modal .modal-close")
+    .forEach(el => el.style.pointerEvents = on ? "none" : "");
+  const status = document.getElementById("limpiar-status");
+  if (status) status.textContent = on ? "Fusionando, no cierres el modal…" : "";
+}
+
 function limpiarPlanGrupo(gi) {
-  // Devuelve {destinoId, origenes, nuevoNombre, nombreDestino} para el grupo gi, sin tocar el server.
+  // Lee del array que devolvió el server (window._limpiarGroups), NO del DOM:
+  // el DOM es solo presentación, la data real vive en la variable JS.
+  const g = (window._limpiarGroups || [])[gi];
   const sel      = document.getElementById(`canonical-${gi}`);
   const renameEl = document.getElementById(`rename-${gi}`);
-  if (!sel) return null;
+  if (!g || !sel) return null;
   const nuevoNombre = (renameEl?.value || "").trim();
   const destinoId = +sel.value;
-  const grupoEl = document.querySelector(`[data-limpiar-group="${gi}"]`);
-  const allIds = [...grupoEl.querySelectorAll(`#canonical-${gi} option`)].map(o => +o.value);
-  const origenes = allIds.filter(id => id !== destinoId);
+  const origenes = g.members.map(m => m.id).filter(id => id !== destinoId);
+  const destinoMember = g.members.find(m => m.id === destinoId);
   return {
-    destinoId, origenes, nuevoNombre,
-    nombreDestino: sel.options[sel.selectedIndex].text.split("(")[0].trim(),
+    gi, destinoId, origenes, nuevoNombre,
+    nombreDestino: nuevoNombre || destinoMember?.nombre || sel.options[sel.selectedIndex].text.split("(")[0].trim(),
   };
 }
 
@@ -3293,20 +3313,27 @@ async function ejecutarFusionGrupo(plan) {
 }
 
 async function fusionarGrupo(gi, allIds) {
+  if (_limpiarMerging) return;
   const plan = limpiarPlanGrupo(gi);
   if (!plan || !plan.origenes.length) return;
 
   if (!confirm(`¿Fusionar ${plan.origenes.length} empresa(s) hacia "${plan.nombreDestino}"?`)) return;
 
+  setLimpiarMerging(true);
   const r = await ejecutarFusionGrupo(plan);
-  if (!r.ok) { toast(r.error,"err"); return; }
+  if (!r.ok) {
+    setLimpiarMerging(false);
+    toast(`Grupo ${gi+1}: ${r.error}`,"err");
+    return;
+  }
 
   toast(`✓ ${r.fusionadas} empresa(s) fusionadas`);
   await Promise.all([loadEmpresas(), loadStats()]);
-  await loadLimpieza();
+  await loadLimpieza();   // recarga grupos y libera el lock vía setLimpiarMerging(false)
 }
 
 async function fusionarSeleccionados() {
+  if (_limpiarMerging) return;
   const checks = [...document.querySelectorAll(".limpiar-group-chk:checked")];
   if (!checks.length) return;
 
@@ -3319,15 +3346,25 @@ async function fusionarSeleccionados() {
   // Un solo confirm para todos los grupos marcados.
   if (!confirm(`¿Fusionar ${planes.length} grupo(s) (${totalOrigenes} empresa(s) en total)?\nEsta acción no se puede deshacer.`)) return;
 
-  let fusionadas = 0, errores = 0;
+  setLimpiarMerging(true);
+  let fusionadas = 0;
   for (const plan of planes) {
     const r = await ejecutarFusionGrupo(plan);
-    if (r.ok) fusionadas += r.fusionadas; else errores++;
+    if (!r.ok) {
+      // Para en el primer error: el resto de los grupos queda intacto y el usuario
+      // sabe exactamente cuál falló, en vez de un conteo agregado sin detalle.
+      setLimpiarMerging(false);
+      toast(`✓ ${fusionadas} fusionadas antes del error | Grupo ${plan.gi+1} ("${plan.nombreDestino}") falló: ${r.error}`,"err");
+      await Promise.all([loadEmpresas(), loadStats()]);
+      await loadLimpieza();
+      return;
+    }
+    fusionadas += r.fusionadas;
   }
 
-  toast(`✓ ${fusionadas} empresa(s) fusionadas${errores ? ` | ${errores} grupo(s) con error` : ""}`);
+  toast(`✓ ${fusionadas} empresa(s) fusionadas en ${planes.length} grupo(s)`);
   await Promise.all([loadEmpresas(), loadStats()]);
-  await loadLimpieza();
+  await loadLimpieza();   // recarga grupos y libera el lock vía setLimpiarMerging(false)
 }
 
 // ── Export / Backup ───────────────────────────────────────────────────────────
@@ -3372,13 +3409,17 @@ function closeModal(id) {
 }
 
 document.getElementById("overlay").addEventListener("click", e => {
+  if (_limpiarMerging) return;   // no cerrar nada mientras hay una fusión en curso
   if (e.target === document.getElementById("overlay")) {
     document.getElementById("overlay").classList.remove("show");
   }
 });
 
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") document.getElementById("overlay").classList.remove("show");
+  if (e.key === "Escape") {
+    if (_limpiarMerging) return;   // no cerrar nada mientras hay una fusión en curso
+    document.getElementById("overlay").classList.remove("show");
+  }
   if (e.key === "Enter" && document.getElementById("overlay").classList.contains("show")) {
     const activeModal = document.querySelector("#overlay .modal:not([style*='display: none'])");
     if (!activeModal) return;
