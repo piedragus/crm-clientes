@@ -6688,6 +6688,37 @@ class TestImportarArchivoUnico(unittest.TestCase):
         self.assertEqual(len(total), 1)
 
 
+class TestEsErrorTransitorio(unittest.TestCase):
+    """Peer review intensivo: es_error_transitorio() usa isinstance, no
+    comparación de type(e).__name__ contra un set de strings fijo — eso
+    perdía el polimorfismo (ej. InterruptedError es subclase de OSError
+    pero su __name__ no matcheaba un set {'OSError', 'PermissionError'})."""
+
+    def test_subclases_de_oserror_son_transitorias(self):
+        from importer.single_file import es_error_transitorio
+        # Todas estas son subclases de OSError en Python 3 — deben
+        # detectarse como transitorias sin necesitar un caso por cada una.
+        for excepcion in (PermissionError("x"), BlockingIOError("x"),
+                          InterruptedError("x"), FileNotFoundError("x"),
+                          TimeoutError("x"), OSError("x")):
+            with self.subTest(tipo=type(excepcion).__name__):
+                self.assertTrue(es_error_transitorio(excepcion))
+
+    def test_sqlite_operational_error_es_transitorio(self):
+        """sqlite3.OperationalError NO es subclase de OSError — necesita
+        chequeo aparte. Es el caso típico de 'database is locked' por
+        contención entre el watcher y el proceso de Flask."""
+        from importer.single_file import es_error_transitorio
+        import sqlite3
+        self.assertTrue(es_error_transitorio(sqlite3.OperationalError("database is locked")))
+
+    def test_errores_no_relacionados_a_io_no_son_transitorios(self):
+        from importer.single_file import es_error_transitorio
+        for excepcion in (ValueError("x"), RuntimeError("x"), KeyError("x"), TypeError("x")):
+            with self.subTest(tipo=type(excepcion).__name__):
+                self.assertFalse(es_error_transitorio(excepcion))
+
+
 
 
 # =====================================================================
@@ -6831,14 +6862,14 @@ class TestWatcherHandler(unittest.TestCase):
             intentos["n"] += 1
             if intentos["n"] <= 2:
                 return {"estado": "error", "motivo": "PermissionError: archivo en uso",
-                       "error_tipo": "PermissionError", "empresa_id": None,
+                       "transitorio": True, "empresa_id": None,
                        "empresa_nombre": None, "cotizacion_id": None}
             return resultado_real
 
         handler = wh.CotizacionHandler(self.db, self.tmpdir, poll_interval=0.05)
         try:
             with patch.object(wh, "importar_archivo", side_effect=importar_con_fallos_iniciales):
-                with patch.object(wh, "REINTENTO_BACKOFF_SECONDS", 0.1):
+                with patch.object(wh, "BACKOFF_SECUENCIA", [0.05, 0.05, 0.05, 0.05, 0.05, 0.05]):
                     with patch.object(wh, "DEBOUNCE_SECONDS", 0.05):
                         path = os.path.join(self.tmpdir, "cot_bloqueada.pdf")
                         with open(path, "w") as f:
@@ -6873,7 +6904,7 @@ class TestWatcherHandler(unittest.TestCase):
 
         def siempre_falla(db, path, root_path, extensions=None):
             return {"estado": "error", "motivo": "PermissionError: archivo en uso",
-                   "error_tipo": "PermissionError", "empresa_id": None,
+                   "transitorio": True, "empresa_id": None,
                    "empresa_nombre": None, "cotizacion_id": None}
 
         resultados = []

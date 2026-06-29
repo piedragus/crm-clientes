@@ -76,6 +76,17 @@ falta que el watcher y el navegador estén abiertos al mismo tiempo,
 los archivos quedan importados igual, el aviso es solo para que te
 enteres si tenías el CRM abierto en ese momento.
 
+## Análisis estático de seguridad (opcional, para desarrollo)
+
+```bash
+pip install -r requirements-dev.txt
+bandit -r server.py db_manager.py importer/ extraccion/ watcher/ extractor_texto.py resumidor.py -c bandit.yaml
+```
+
+`bandit.yaml` documenta por qué cada exclusión es un falso positivo
+verificado (no "ignorar todo lo que moleste") — ver comentarios en el
+archivo.
+
 ## Variables de entorno IA
 
 ```text

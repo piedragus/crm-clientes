@@ -493,8 +493,13 @@ class DBManager:
                 return 'tag'
             if 'nombre' in cols:
                 return 'nombre'
-        except Exception:
-            pass
+        except Exception as e:
+            # Bandit B110: try/except/pass silencioso. El fallback a
+            # 'tag' es razonable (es la convención por defecto del
+            # schema), pero un fallo en PRAGMA table_info acá indica
+            # algo raro con la DB que vale la pena ver en el log.
+            logging.warning(f"No se pudo introspeccionar la tabla tags, "
+                           f"usando 'tag' como default: {e}")
         return 'tag'
 
     def _ensure_tags_schema(self):

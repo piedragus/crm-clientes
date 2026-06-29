@@ -4,6 +4,7 @@ la importación de archivos nuevos (Sprint F).
 """
 import logging
 import os
+import random
 import threading
 import time
 
@@ -12,14 +13,23 @@ from watchdog.events import FileSystemEventHandler
 from importer import importar_archivo
 from watcher.watcher_config import ruta_excluida, WATCHER_EXTS, DEBOUNCE_SECONDS
 
-# Tipos de excepción que indican un problema TRANSITORIO de acceso al
-# archivo (típicamente: OneDrive todavía lo está sincronizando y lo
-# tiene bloqueado), no un error permanente. Vale la pena reintentar
-# estos; no tiene sentido reintentar un FileNotFoundError o un PDF
-# corrupto, que van a fallar siempre igual.
-ERRORES_TRANSITORIOS = {"PermissionError", "OSError", "BlockingIOError"}
-MAX_REINTENTOS = 5
-REINTENTO_BACKOFF_SECONDS = 10  # espera antes de cada reintento
+# Backoff exponencial con jitter (peer review intensivo): un backoff
+# fijo de 10s x 5 reintentos (50s totales) es insuficiente para un
+# archivo grande sincronizando en una conexión lenta — un PDF de 30MB
+# a 5Mbps de subida tarda ~50s solo en bajar, y el watcher agotaría los
+# reintentos antes de que termine. Secuencia 2s,4s,8s,16s,32s,64s
+# (~126s totales) da mucho más margen sin reintentar agresivamente al
+# principio. Jitter (+/- 20%) evita que, si varios archivos se traban
+# al mismo tiempo (sincronización masiva inicial), todos reintenten en
+# el mismo instante exacto.
+BACKOFF_SECUENCIA = [2, 4, 8, 16, 32, 64]
+MAX_REINTENTOS = len(BACKOFF_SECUENCIA)
+
+
+def _backoff_con_jitter(intento: int) -> float:
+    base = BACKOFF_SECUENCIA[min(intento, len(BACKOFF_SECUENCIA) - 1)]
+    jitter = base * 0.2
+    return base + random.uniform(-jitter, jitter)
 
 
 class CotizacionHandler(FileSystemEventHandler):
@@ -113,17 +123,17 @@ class CotizacionHandler(FileSystemEventHandler):
         resultado = importar_archivo(self.db, path, self.root_path)
         resultado["path"] = path
 
-        if (resultado["estado"] == "error"
-                and resultado.get("error_tipo") in ERRORES_TRANSITORIOS):
+        if (resultado["estado"] == "error" and resultado.get("transitorio")):
             intentos = self._reintentos.get(path, 0) + 1
             if intentos <= MAX_REINTENTOS:
                 self._reintentos[path] = intentos
+                espera = _backoff_con_jitter(intentos - 1)
                 logging.warning(
                     f"Watcher: error transitorio en {path} "
-                    f"({resultado.get('error_tipo')}) — reintento {intentos}/{MAX_REINTENTOS} "
-                    f"en {REINTENTO_BACKOFF_SECONDS}s")
+                    f"({resultado.get('motivo')}) — reintento {intentos}/{MAX_REINTENTOS} "
+                    f"en {espera:.1f}s")
                 with self._lock:
-                    self._pendientes[path] = time.time() - DEBOUNCE_SECONDS + REINTENTO_BACKOFF_SECONDS
+                    self._pendientes[path] = time.time() - DEBOUNCE_SECONDS + espera
                 return
             logging.error(f"Watcher: {path} agotó los {MAX_REINTENTOS} reintentos, "
                           f"queda como error definitivo: {resultado.get('motivo')}")
