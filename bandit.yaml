@@ -1,0 +1,37 @@
+# Configuración de Bandit (SAST) — mandato del peer review intensivo.
+#
+# Las exclusiones de abajo NO son "ignorar todo lo que moleste" — cada
+# una corresponde a un hallazgo que se verificó manualmente línea por
+# línea, rastreando el flujo de datos real (no solo el patrón
+# sintáctico que Bandit puede ver). Documentado en el PR #41.
+
+skips:
+  # B608 (hardcoded_sql_expressions): Bandit marca cualquier f-string
+  # con SELECT/UPDATE cerca de un WHERE/SET, sin poder distinguir si lo
+  # interpolado es texto hardcodeado o input de usuario. Los 5 casos en
+  # este proyecto interpolan SIEMPRE uno de:
+  #   (a) un string literal fijo elegido por un ternario en Python
+  #       (ej. pais_filter = "AND e.pais=?" if pais else "" — el VALOR
+  #       de `pais` va por parámetro ?, nunca se interpola directo), o
+  #   (b) nombres de columna ya filtrados contra un set `permitidos`
+  #       explícito, o ya confirmados por PRAGMA table_info (schema
+  #       real de la DB, no input arbitrario) antes de construir el SQL.
+  # Verificado caso por caso en server.py:1300,1310,1338,1731 y los
+  # análogos de db_manager.py — ninguno acepta una columna/tabla cuyo
+  # nombre provenga de request.json sin pasar por un allow-list primero.
+  - B608
+
+  # B104 (hardcoded_bind_all_interfaces): server.py:2357 hace bind a
+  # 0.0.0.0 — intencional y documentado en INSTALACION.md (sección
+  # "Multiusuario"): por defecto el server NO escucha en 0.0.0.0 salvo
+  # que el usuario exporte HOST=0.0.0.0 explícitamente para acceder
+  # desde otra máquina en su propia red. No es un default inseguro
+  # silencioso, es un opt-in documentado.
+  - B104
+
+  # B311 (blacklist random): watcher_handler.py usa random.uniform()
+  # para el jitter del backoff de reintentos del watcher — no es un
+  # contexto de seguridad/criptografía (no genera tokens, contraseñas,
+  # ni nada sensible), así que el random module estándar es la
+  # herramienta correcta, no secrets/random.SystemRandom.
+  - B311

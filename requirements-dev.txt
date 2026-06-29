@@ -1,0 +1,3 @@
+# Dependencias solo de desarrollo (no se necesitan para correr la app).
+# pip install -r requirements-dev.txt
+bandit
